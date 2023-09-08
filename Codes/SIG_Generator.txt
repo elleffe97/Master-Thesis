@@ -1,0 +1,311 @@
+import com.vp.plugin.model.factory.IModelElementFactory
+import com.vp.plugin.diagram.IDiagramTypeConstants
+
+def projManager = appManager.getProjectManager()
+def proj = projManager.getProject()
+
+def model = proj.toAllLevelModelElementArray("Model")
+def MODEL = model[0]
+
+def diagramManager = appManager.getDiagramManager()
+
+def Diag = diagramManager.getOpenedDiagrams()
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the system model diagram (Micro Service Model)
+
+def MSS = diagramManager.getActiveDiagram()
+
+def elements = MSS.toDiagramElementArray() 
+
+def mod = elements.collect { el ->
+	return el.getMetaModelElement() 
+}	//take all the elements 
+
+def StereotypeList = mod.collect { el ->	
+	return el.toStereotypeModelArray()
+}	//take the elements as StereotypeModelElements
+
+def StereotypeListName = StereotypeList.collect{ iter -> 
+	if (iter ==~ null)
+		return iter[0].getName()}	// Take the list of Stereotypes Names
+
+def MSList = []	//List of elements (only MS classes)
+def MSListName = []	//List of elements names (only MS classes)
+def relFrom = []	//Matrix of associations between elements: each entry is the array of the starting elements of the associations
+// starting from the correspondent element (then we will take the element in the opposit apex)
+
+mod.each{ el ->
+	if (el.hasStereotype("Microservice (I)") || el.hasStereotype("Microservice (C)") || el.hasStereotype("Microservice (N)")){
+		MSListName.add(el.getName())
+		MSList.add(el)
+		relFrom.add(el.toFromRelationshipEndArray())
+		} //Construct the previous vectors
+	}
+def AttributeList=[]	//Matrix of attributes (alisa SGs) names
+def StList = []			//Matrix of stereotypes of each attributes (Functional or Security SG)
+def NewClassesNames = []	// Matrix of the names of the new classes in SIG : MSName.SG
+
+// generate matrices such that each rows correspond to a microservice and each entry to the same SG
+for (i=0; i<MSList.size(); i++){
+	arr = MSList[i].toChildArray() 
+	prot = []
+	attrp =[]
+	sttp =[]
+	for (j=0; j<arr.size(); j++){
+	if (arr[j].hasStereotype("Functional SoftGoal") || arr[j].hasStereotype("Security SoftGoal")){
+		attrp.add(arr[j].getName() as String)
+		prot.add(MSListName[i] + "." + arr[j].getName())
+		sttp.add(arr[j].toStereotypeModelArray()[0].getName() as String)
+		}
+	}
+	AttributeList.add(attrp)
+	NewClassesNames.add(prot)
+	StList.add(sttp)
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the SoftGoals model diagram 
+def SoftGoals = []
+
+Diag.each{ diag -> 
+	if (diag.getName() == "SoftGoals")
+		SoftGoals.add(diag)
+}
+def SGdiagram = SoftGoals[0]
+def sgel = SGdiagram.toDiagramElementArray() 
+def sgmod = sgel.collect { el ->
+	    return el.getMetaModelElement() 
+	}		//Take the elements 
+	
+def StereotypeListSG = sgmod.collect { el ->	
+	    return el.toStereotypeModelArray()
+	}	//Take the elements as StereotypeModelElements
+	
+def StereotypeListNameSG = StereotypeListSG.collect{ iter -> 
+		if (iter ==~ null)
+			return iter[0].getName()}	// Take the list of Stereotypes Names
+
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+def createAss (main, fromi, fromj, toi, toj, NewSG, NewSGShape, SIG, diagramManager, MODEL){ 
+	def ass = IModelElementFactory.instance().createGeneralization()	//Create the generalization
+	MODEL.addChild(ass)
+	ass.setFrom(NewSG[fromi][fromj])
+	ass.setTo(NewSG[toi][toj])
+	//Add the stereotype according to the type
+	if (NewSG[fromi][fromj].toStereotypeModelArray()[0].getName()  contains  "Functional"){ 
+		if (main == true) 
+			ass.addStereotype("F")
+		else
+			ass.addStereotype("f")
+	}
+	else{
+		if (main == true)
+			ass.addStereotype("S")
+		else
+			ass.addStereotype("s")
+	}
+	//add the connection to the diagram
+	def ppp= diagramManager.createConnector(SIG, ass, NewSGShape[fromi][fromj], NewSGShape[toi][toj], null)
+	ppp.setRequestResetCaption(true);
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to check if an element is present in a vector or not given its name
+def control(vet, name){
+	def i=0
+	def found = false
+	while (i<vet.size() && found == false){
+		if (vet.getName() == name)
+			found=true
+		i++
+	}
+	return found
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+/* function to extend the subgraph of the SGs from a MS with arrows which will connect them with the 
+	same SGs (or children/father ones) of MSs not directly dependent, but taht could be indirectly affected by them
+	it follow a sort of DFS visit of the MSM diagram starting from a specific SG of a MS.
+	The nodes will be the classes (Microservices) of the Micor Service Model
+*/
+def createIndAss (i, node1, relf, sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL){
+	def firstlevel =[]	
+	for (j=0; j<relf.size(); j++)
+			firstlevel.add(relf[j].getOppositeEnd().getModelElement())	//the direct children of each class
+	def vis=[]	//visited nodes
+	def index = 0
+	def stack =[node1]	// the stack with the given radix
+	while (stack.size()>0) {	//until the stack isn't empty
+		def node = stack.pop()	//take a node	
+		if (MSListName[i] != node.getName()){	//if the node isn't the radix one
+			for (a=0; a< MSListName.size(); a++){	//take its index in the list of elements of its diagram
+					if (MSListName[a] == node.getName()){
+						index = a
+						break
+					}
+			}
+			if (vis.contains(MSList[index]) == false){	//if it wasn't seen yet
+				if (firstlevel.contains(MSList[index])){	//if it is not in the list of direct children of the node
+					for (d=0; d<relFrom[index].size(); d++){	//foreach child
+						def el = relFrom[index][d].getOppositeEnd().getModelElement()
+							if(vis.contains(el) == false)	//if the child wasn't seen yet
+							stack.add(el) //add it to the stack
+					}
+				}
+				else{
+					for (x=0; x<NewSG[i].size(); x++){	//Take the elements "belonging" to the popped node class (already created in the SIG)
+						attr = NewSG[i][x].toChildArray()
+						father = attr[1].getName()	//Main SG or "Main"
+						sg1 = attr[0].getName()		//SG
+						main = false
+						if (father == "Main")	//check if the SG of the element is a Main one
+							main = true
+						for(k=0; k<NewSG[index].size(); k++){	// For each elements of the new SIG diagram check if we could construct an association
+							attr1 = NewSG[index][k].toChildArray()	//Take the info of the el
+							if (main == true){	//if SG of the selected class is a Main one
+								if (attr1[0].getName() == sg1)	// if they have both Main SGs
+									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the association between the two classes
+								else{	
+									if (attr1[1].getName() == sg1)	//if they share the Main SG
+										createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+									}
+							}
+							else{
+								if (attr1[0].getName() == father)	//if the second element is a main one and it is the same as the other
+									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+								if (attr1[0].getName() == sg1)	//if they are the exact same SG
+									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+								}
+						}
+					}
+				for (d=0; d<relFrom[index].size(); d++)
+					stack.add(relFrom[index][d].getOppositeEnd().getModelElement())	//Add the children of the popped node to the stack
+				}
+			}	
+		}
+		else{	//if the popped one is the radix
+			for (j=0; j<relf.size(); j++)
+				stack.add(relf[j].getOppositeEnd().getModelElement())		//Add the children of the popped node to the stack
+		}
+		vis.add(node)	//Add the popped node to the list of visited ones
+	}
+
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+// Function to find the features of a SG by scannig the SoftGoals diagram
+def searchAttr (nodo, sgmod){
+	def father = nodo.getName()
+	def main = false
+	def sg1 = nodo.toChildArray()[0].getName()
+	sgmod.each{ s -> if (s.getName() == sg1){
+		if (s.toStereotypeModelArray()[0].getName() contains "Main"){
+			main = true
+			father = s.getName()
+		}
+		else
+			father = s.getParent().getName()
+		}
+	}
+	return [father, main]
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+//create a new (class) diagram
+def DD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)
+
+DD.setName("SIG")
+
+diagramManager.openDiagram(DD)
+
+def NewSG = []	//List of elements in this new diagram
+def NewSGShape =[] 
+
+def SIG = diagramManager.getActiveDiagram()	//take the diagram
+
+MODEL.addSubDiagram(SIG)	//add the diagram to the current model
+
+//for each SG detected in the previous part generate a node in the new diagram
+for (i=0; i<NewClassesNames.size(); i++){
+	elms =[]
+	elms1 =[]
+	for (j=0; j<NewClassesNames[i].size(); j++){
+		el = IModelElementFactory.instance().createClass()	//Create the class object
+		el.setName(NewClassesNames[i][j])									//Set the name from the previous list
+		at = IModelElementFactory.instance().createAttribute()			//Create an attribute (name of SG)
+		at.setName(AttributeList[i][j])									//Give the attribute the name it has before and add it to the class
+		el.addChild(at)
+		attr = searchAttr(el, sgmod)
+		at1 = IModelElementFactory.instance().createAttribute()			//Create another attribute 
+		if (attr[1])
+			at1.setName("Main")							//Call it "Main" if the SG is a Main one								
+		else
+			at1.setName(attr[0])						//Call it with ne name of its Main SG
+		el.addChild(at1)							//Add it to the class
+		el.addStereotype(StList[i][j])		//Add the correspondent stereotype
+		elms.add(el)						
+		MODEL.addChild(el)					//add it to the model
+		def e1 = diagramManager.createDiagramElement(SIG, el);	//add it to the diagram
+		elms1.add(e1)
+	}
+	NewSG.add(elms)	//add it to the matrix of elements of the new diagram (a row for each ms)
+	NewSGShape.add(elms1)
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main cycle to crerate the SIG (only directed associations) with a scan of the MSM model and SIG model
+for (i=0; i< relFrom.size(); i++){		//Scan the list of relations (it has the same size of the element list NewSG
+	
+	for (x=0; x<NewSG[i].size(); x++){		//Take the elements "belonging" to the selected class
+		attr = NewSG[i][x].toChildArray()
+		father = attr[1].getName()	//Main SG or "Main"
+		sg1 = attr[0].getName()		//SG
+		main = false
+		if (father == "Main")	//check if the SG is a Main one or not
+			main = true
+		for (j=0; j<relFrom[i].size(); j++){	//for each child of the MS class 
+			point = relFrom[i][j].getOppositeEnd().getModelElement() 
+			index = 0
+			founded = false
+			for (a=0; a< MSListName.size(); a++){
+				if (MSListName[a] == point.getName()){	//check the index of the child in the MSM diagram
+					index =a
+					founded = true
+					break
+				}
+			}
+			if (founded){
+				for(k=0; k<NewSG[index].size(); k++){	// For each class of the SIG derived from the founded MS
+					attr1 = NewSG[index][k].toChildArray() 
+					if (main == true){	//if the SG of the first class is a Main one
+						if (attr1[0].getName() == sg1)	//if the second one is a Main as wee and they are the same
+							createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the connection in SIG
+						else{	// if the Main SG of the second class is the same as the one of the first one
+							if (attr1[1].getName() == sg1)
+								createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+							}
+					}
+					else{
+						if (attr1[0].getName() == father)	//if the second element has a Main SG equals to the one of the first class
+							createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+						if (attr1[0].getName() == sg1)	//if they have the exactly same SG
+							createAss(false, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+					}
+				}
+			}
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main cycle to crerate the indirected connection in the SIG
+for (i=0; i< relFrom.size(); i++){
+	if (relFrom[i].size()>0){
+	createIndAss(i, MSList[i], relFrom[i], sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL)
+	}
+}
+
+diagramManager.layout(SIG, diagramManager.LAYOUT_COMPACT)	//Adjust the Layout	
+
+return "SIG Created!"

@@ -1,0 +1,239 @@
+import com.vp.plugin.model.factory.IModelElementFactory
+import com.vp.plugin.diagram.IDiagramTypeConstants
+
+def Microservices = []				//List of microservices on which the refactoring solution will be applied
+
+def SecuritySmells = ["Insufficient Access Control"]	//List of security smells to be detected
+
+def projManager = appManager.getProjectManager()						//Open the project
+def proj = projManager.getProject()
+
+def model = proj.toAllLevelModelElementArray("Model")					//Select the model 
+def MODEL = model[0]
+
+def diagramManager = appManager.getDiagramManager()
+
+def Diag = diagramManager.getOpenedDiagrams()
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the system model diagram
+def Msm = []
+Diag.each{diag -> 														
+	if (diag.getName() == "Micro Services Model")
+		Msm.add(diag)
+}
+def MSM = Msm[0]
+//Take the elements (Microservices) from the system model diagram and save them in an array
+def msmel = MSM.toDiagramElementArray()
+
+def msmod = msmel.collect { el ->										
+    		return el.getMetaModelElement()
+}
+def microservices = []//Microservices 
+
+msmod.each{ el ->
+	if (el.hasStereotype("Microservice (I)") || el.hasStereotype("Microservice (N)") || el.hasStereotype("Microservice (C)"))
+		microservices.add(el)
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the security smells knowledge model diagram
+def Sskm = []
+Diag.each{ diag ->  													
+	if (diag.getName() == "Security Smells Model")
+		Sskm.add(diag)
+}
+def SSKM =Sskm[0]
+def ss = SSKM.toDiagramElementArray() 
+//Take the elements from the system model diagram and save them in an array
+def ssmod = ss.collect { el ->
+    return el.getMetaModelElement() 
+}	
+// Take all the associations of the diagram and save them into an array
+def SSassociation =[]
+for (i=0; i<ssmod.size(); i++){
+	if (ssmod[i].getModelType() == "Association"){
+		SSassociation.add(ssmod[i])
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function which returns the position of a microservice in the microservice array given its name
+def findMS(micro, name){
+	for (i=0; i<micro.size(); i++){
+		if (micro[i].getName()==name)
+			return i
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in an array given its name
+def presence(els, name){
+	for (i=0; i<els.size(); i++){
+		if (els[i].getName() == name)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main function
+def main(name, SS, MS){
+	
+	def microservices =[] //list of microservice with the actual SS
+	def secsmell
+	for (n=0; n<SS.size(); n++){	//take the class related to the SS given as input from the SSKM
+		if (SS[n].getName() == name)
+			secsmell=SS[n]
+	}
+	def SecSG = []	//list of security softgoals theatened by the SS
+	def Feat = [] //list of features of the microservices to be declared affected by the SS
+	def SG = secsmell.toToRelationshipEndArray()
+	def general = false
+	def Note=[]
+	def control =[]
+	for (i=0; i<SG.size(); i++){	//find the list of theatened SG
+		sup=[]
+		el = SG[i].getOppositeEnd().getModelElement()
+		def stereotype = ""
+
+		if (el.hasStereotype("Main Security SoftGoal")) 
+		    stereotype = "Main Security SoftGoal"
+		else if (el.hasStereotype("Abstract MicroService")) 
+		    stereotype = "Abstract MicroService"
+		else if (el.hasStereotype("Microservice Component")) 
+		    stereotype = "Microservice Component"
+		
+		switch (stereotype) {
+		    case "Main Security SoftGoal":	//search for the security soft goals
+		        	sup.add(el.getName())
+				children = el.toChildArray()
+				for (j=0; j<children.size(); j++)
+					sup.add(children[j].getName())
+				SecSG.add(sup)
+		        	break
+		    case "Abstract MicroService":		//search for the features in the AM
+		        if (el.toToRelationshipEndArray().size()==0){
+				Feat.add(stereotype)
+				Feat.add(el.toChildArray())
+				}
+				else{					//if the AM could have a Microservice Component
+					ass = el.toToRelationshipEndArray()[0].getOppositeEnd().getModelElement()
+					Feat.add(ass.getName())
+					Feat.add(ass.toChildArray())
+				}
+				if (Feat[1][0].getName().contains("toany") || Feat[1][0].getName().contains("toall")){
+					control.add(el.toFromRelationshipArray().size())
+					Note = el.toFromRelationshipArray()[0].getTo().getDescription()
+					general = true
+				}
+		        	break
+		    case "Microservice Component":	//if only a MC is needed
+		       	Feat.add(el.getName())
+				Feat.add(el.toChildArray())
+				if (Feat[1][0].getName().contains("toany") || Feat[1][0].getName().contains("toall")){
+					control.add(el.toFromRelationshipArray().size())
+					Note = el.toFromRelationshipArray()[0].getTo().getDescription()
+					general = true
+				}
+		        	break
+		    default:
+		    		control.add("Problems")
+		}
+	}
+
+	for (i=0; i<MS.size(); i++){	//searcing for the affected microservices
+		els = MS[i].toChildArray()
+		sum = 0
+		foundMethod = false
+		foundData = true
+		method = []		//methods of the microservice
+		microcomp = []	//microservice components
+		type = []		//other elements of the microservice (data)
+		array= []
+		for (o=0; o<SecSG.size(); o++)	//control array
+			array.add(0)
+		for (j=0; j< els.size(); j++){	// foreach attribute of the microservice
+		
+			for (h=0; h<array.size(); h++){	//for each family of security soft goals threaten
+				if (array[h] == 0){		//if a soft goal of that family wasn't already found in the MS
+					for (l=0; l<SecSG[h].size(); l++){
+						if (els[j].getName()==SecSG[h][l]){	//search for the correspondence
+							sum+=1			//if the correspondence is founded
+							array[h] = 1	//set the family as taken
+							break
+						}
+					} 
+				}
+			}
+			if (els[j].hasStereotype("Method"))	// if the element is a method add it to the correct array
+				method.add(els[j].getName())
+			else if (els[j].hasStereotype("Microservice Component")){	//if the element is a MS
+				microcomp.add(els[j].getName())	//add it to the correct array
+				met = els[j].toChildArray()
+				if (met.size()>0)	//if it has a method add it to the correct array
+					method.add(met[0].getName())
+			}
+			else if (!(els[j].toStereotypeModelArray()[0].getName().contains("Goal")))	//otherwise take the stereotype of the element
+				type.add(els[j].toStereotypeModelArray()[0].getName())
+		}
+		
+		
+		if (sum>=SecSG.size()){	// if the microservice has at least one soft goal for each family
+			if (general == true){	//if the security smells required a general scan, only add the microservice to the list
+				microservices.add(MS[i].getName())
+				break
+			}
+			else{	//otherwise
+				if (Feat[0] == "Abstract MicroService"){	//if the SS was connected to an AM
+					if (Feat[1].size()>0){		//if the features array created is not void
+						for (l=0; l<Feat[1].size(); l++){	
+							if (Feat[1][l].hasStereotype("Method")){	//scan it to find a match with the methods of the MS
+								for (l1=0; l1<method.size(); l1++){
+									if (method[l1] == Feat[1][l].getName()){
+										foundMethod=true		//if you find the correspondence set the condition variable to true
+										break
+									}
+								}
+							}
+							else{	//if the feature of the AS is not a method
+								ster = Feat[1][l].toStereotypeModelArray()[0].getName()	
+								for (l1=0; l1<type.size(); l1++){
+									if (type[l1] == ster){	//check if the MS has an attribute with the same stereotype
+										foundData = true
+										break
+									}
+								}
+							}
+						}
+					}
+					else
+						foundData = true	//otherwise we could take the second condition always as true
+				}
+				else{	// if the a Micorservice Component is required (or allowed)
+					foundData = true
+					for (l=0; l<microcomp.size(); l++){	//check its presence in the MS
+						if (Feat[0] == microcomp[l]){
+							foundData = false
+							break
+						}
+					}
+				}
+				
+			if (foundMethod == false & foundData == true)	//the microservice is detected when the method isn't found, but the data are present
+				microservices.add(MS[i].getName())
+			}		
+		}
+	}	
+	
+	return [microservices, Note]	//the return are the list of detected microservices and (eventually ) the Note
+									//associated to the Abstract Microservice
+}
+//---------------------------------------------------------------------------------------------------------------------------------------------//
+//Main call to the main function (for each security smell)
+for (s1=0; s1<SecuritySmells.size(); s1++){
+	supp = main(SecuritySmells[s1], ssmod, microservices)
+	Microservices.add(supp)
+}
+
+return Microservices
