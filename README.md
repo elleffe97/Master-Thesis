@@ -30,8 +30,8 @@ Otherwise, to use our approach you need to generate a Micro Service Model of you
 
 2. Right-click on the **Model** folder and in the **Sub Diagrams** windows choose **New Diagram**.
    a. Search for **Composite Structure Diagram**, select it and click on **Next** button.
-   b. Select the **Blank** project suggested, then click on **Next** button. Select a name for the diagram and click on        **Next** button again.
-   c. Following the instruction given in Section \ref{howto} construct the model using classes, parts (attributes), and associations. Remember to add the correct stereotypes to all the elements.
+   b. Select the **Blank** project suggested, then click on **Next** button. Select a name for the diagram and click on **Next** button again.
+   c. Construct the model using classes, parts (attributes), and associations. Remember to add the correct stereotypes to all the elements.
 
 ### Scripts execution
 
@@ -39,10 +39,10 @@ In this section, we will show how to execute the scripts to obtain the desired r
 
 1. Open the project ("**OnlineBoutique.vpp**") in Visual Paradigm and check if all the diagrams are opened by clicking at the bottom on the right side of the workspace. You must see all the 3 diagrams there. If you don't, you just need to double-click on them on the Model Navigator until they open one at a time. Then put yourself on the **Micro Service Model** diagram.
 
-2. Start the just-installed plug-in by clicking on the **Plugin** window and then on the **Script Editor** button. You should see a window like the one in Fig. \ref{script1}.
+2. Start the just-installed plug-in by clicking on the **Plugin** window and then on the **Script Editor** button. 
 
 3. Copy and paste the content of script "**SIG\_Generator.txt**" and click on the **Execute** button at the bottom left-hand side of the editor window. You should see the just-created SIG behind the window.
 
-4. Borrow all the code in the script editor and paste there the content of the file "**SS\_Detector.txt**". In this phase, you could interact with the code changing the security smell to be analyzed in the `SecuritySmells` list, as shown in Fig. \ref{det}. Then run the code by clicking on the **Execute** button. The results will be shown on the right-hand side of the Script Editor Windows and you need to save them because they will be the input for the next and last step.
+4. Drop all the code in the script editor and paste the content of the file "**SS\_Detector.txt**". In this phase, you could interact with the code changing the security smell to be analyzed in the `SecuritySmells` list. Then run the code by clicking on the **Execute** button. The results will be shown on the right-hand side of the Script Editor Windows and you need to save them because they will be the input for the next and last step.
 
-5. Having a list of security smells and their relative affected microservices you can now copy and paste the code from "**SubDiagram\_Generator.txt**" and change the content of the lists `Microservices` and `SecuritySmells` (see. Fig \ref{final}) with the just obtained strings. Then execute the scripts and visualize the results in the Model Navigator.
+5. Having a list of security smells and their relative affected microservices you can now copy and paste the code from "**SubDiagram\_Generator.txt**" and change the content of the lists `Microservices` and `SecuritySmells` with the just obtained strings. Then execute the scripts and visualize the results in the Model Navigator.
