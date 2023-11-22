@@ -88,26 +88,26 @@ def StereotypeListNameSG = StereotypeListSG.collect{ iter ->
 
 
 //--------------------------------------------------------------------------------------------------------------------------------//
-def createAss (main, fromi, fromj, toi, toj, NewSG, NewSGShape, SIG, diagramManager, MODEL){ 
-	def ass = IModelElementFactory.instance().createGeneralization()	//Create the generalization
-	MODEL.addChild(ass)
-	ass.setFrom(NewSG[fromi][fromj])
-	ass.setTo(NewSG[toi][toj])
+def createAssoc (main, fromi, fromj, toi, toj, NewSG, NewSGShape, SIG, diagramManager, MODEL){ 
+	def assoc = IModelElementFactory.instance().createGeneralization()	//Create the generalization
+	MODEL.addChild(assoc)
+	assoc.setFrom(NewSG[fromi][fromj])
+	assoc.setTo(NewSG[toi][toj])
 	//Add the stereotype according to the type
 	if (NewSG[fromi][fromj].toStereotypeModelArray()[0].getName()  contains  "Functional"){ 
 		if (main == true) 
-			ass.addStereotype("F")
+			assoc.addStereotype("F")
 		else
-			ass.addStereotype("f")
+			assoc.addStereotype("f")
 	}
 	else{
 		if (main == true)
-			ass.addStereotype("S")
+			assoc.addStereotype("S")
 		else
-			ass.addStereotype("s")
+			assoc.addStereotype("s")
 	}
 	//add the connection to the diagram
-	def ppp= diagramManager.createConnector(SIG, ass, NewSGShape[fromi][fromj], NewSGShape[toi][toj], null)
+	def ppp= diagramManager.createConnector(SIG, assoc, NewSGShape[fromi][fromj], NewSGShape[toi][toj], null)
 	ppp.setRequestResetCaption(true);
 }
 
@@ -130,7 +130,7 @@ def control(vet, name){
 	it follow a sort of DFS visit of the MSM diagram starting from a specific SG of a MS.
 	The nodes will be the classes (Microservices) of the Micor Service Model
 */
-def createIndAss (i, node1, relf, sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL){
+def createIndAssoc (i, node1, relf, sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL){
 	def firstlevel =[]	
 	for (j=0; j<relf.size(); j++)
 			firstlevel.add(relf[j].getOppositeEnd().getModelElement())	//the direct children of each class
@@ -166,17 +166,17 @@ def createIndAss (i, node1, relf, sgmod, relFrom, NewSG, NewSGShape, SIG, diagra
 							attr1 = NewSG[index][k].toChildArray()	//Take the info of the el
 							if (main == true){	//if SG of the selected class is a Main one
 								if (attr1[0].getName() == sg1)	// if they have both Main SGs
-									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the association between the two classes
+									createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the association between the two classes
 								else{	
 									if (attr1[1].getName() == sg1)	//if they share the Main SG
-										createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+										createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
 									}
 							}
 							else{
 								if (attr1[0].getName() == father)	//if the second element is a main one and it is the same as the other
-									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+									createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
 								if (attr1[0].getName() == sg1)	//if they are the exact same SG
-									createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+									createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
 								}
 						}
 					}
@@ -280,17 +280,17 @@ for (i=0; i< relFrom.size(); i++){		//Scan the list of relations (it has the sam
 					attr1 = NewSG[index][k].toChildArray() 
 					if (main == true){	//if the SG of the first class is a Main one
 						if (attr1[0].getName() == sg1)	//if the second one is a Main as wee and they are the same
-							createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the connection in SIG
+							createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the connection in SIG
 						else{	// if the Main SG of the second class is the same as the one of the first one
 							if (attr1[1].getName() == sg1)
-								createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+								createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
 							}
 					}
 					else{
 						if (attr1[0].getName() == father)	//if the second element has a Main SG equals to the one of the first class
-							createAss(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+							createAssoc(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
 						if (attr1[0].getName() == sg1)	//if they have the exactly same SG
-							createAss(false, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+							createAssoc(false, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
 					}
 				}
 			}
@@ -302,7 +302,7 @@ for (i=0; i< relFrom.size(); i++){		//Scan the list of relations (it has the sam
 //Main cycle to crerate the indirected connection in the SIG
 for (i=0; i< relFrom.size(); i++){
 	if (relFrom[i].size()>0){
-	createIndAss(i, MSList[i], relFrom[i], sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL)
+	createIndAssoc(i, MSList[i], relFrom[i], sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, MSListName, MSList, MODEL)
 	}
 }
 

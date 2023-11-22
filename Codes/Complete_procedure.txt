@@ -1,0 +1,1446 @@
+import com.vp.plugin.model.factory.IModelElementFactory
+import com.vp.plugin.diagram.IDiagramTypeConstants
+
+def projManager = appManager.getProjectManager()
+def proj = projManager.getProject()
+
+def model = proj.toAllLevelModelElementArray("Model")
+def MODEL = model[0]
+
+def diagramManager = appManager.getDiagramManager()
+
+def Diag = diagramManager.getOpenedDiagrams()
+
+def Microservices = []				//Matrix of microservices affected the security smells (general presence)
+def ProblematicMicroservices = [] 	//Matrix of microservices with SS with the SG filter
+
+def SecuritySmells = []	//List of security smells names to be detected (if void, all the SS will be checked)
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+
+//Take the system model diagram
+def Msm = []
+Diag.each{diag -> 														
+	if (diag.getName() == "Micro Services Model")
+		Msm.add(diag)
+}
+def MSM = Msm[0]
+//Take the elements (Microservices) from the system model diagram and save them in an array
+def msmel = MSM.toDiagramElementArray()
+
+def msmod = msmel.collect { el ->										
+    		return el.getMetaModelElement()
+}
+def microservices = []//Microservices 
+def users =[] // external access points
+def links = [] // associations between microservices
+def systSecSG = [] // system security requirements
+def microservicesName = []	//List of elements names (only MS classes)
+def relFrom = []	//Matrix of associations between elements: each entry is the array of the starting elements of the associations
+// starting from the correspondent element (then we will take the element in the opposit apex)
+
+msmod.each{ el ->
+	if (el.hasStereotype("Microservice (I)") || el.hasStereotype("Microservice (N)") || el.hasStereotype("Microservice (C)")){
+		microservices.add(el)
+		microservicesName.add(el.getName())
+		relFrom.add(el.toFromRelationshipEndArray())
+	}
+	if (el.hasStereotype("User"))
+		users.add(el)
+	if (el.getModelType() == "Association")
+		links.add(el)
+	if (el.hasStereotype("Security SoftGoal"))
+		systSecSG.add(el.getName())
+}
+
+def AttributeList=[]	//Matrix of attributes (alisa SGs) names
+def StList = []			//Matrix of stereotypes of each attributes (Functional or Security SG)
+def NewClassesNames = []	// Matrix of the names of the new classes in SIG : microservices.SG
+// generate matrices such that each rows correspond to a microservice and each entry to the same SG
+for (i=0; i<microservices.size(); i++){
+	arr = microservices[i].toChildArray() 
+	prot = []
+	attrp =[]
+	sttp =[]
+	for (j=0; j<arr.size(); j++){
+	if (arr[j].hasStereotype("Functional SoftGoal") || arr[j].hasStereotype("Security SoftGoal")){
+		attrp.add(arr[j].getName() as String)
+		prot.add(microservicesName[i] + "." + arr[j].getName())
+		sttp.add(arr[j].toStereotypeModelArray()[0].getName() as String)
+		}
+	}
+	AttributeList.add(attrp)
+	NewClassesNames.add(prot)
+	StList.add(sttp)
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the SoftGoals model diagram 
+def SoftGoals = []
+
+Diag.each{ diag -> 
+	if (diag.getName() == "SoftGoals")
+		SoftGoals.add(diag)
+}
+def SGdiagram = SoftGoals[0]
+def sgel = SGdiagram.toDiagramElementArray() 
+def sgmod = sgel.collect { el ->
+	    return el.getMetaModelElement() 
+	}		//Take the elements 
+	
+def StereotypeListSG = sgmod.collect { el ->	
+	    return el.toStereotypeModelArray()
+	}	//Take the elements as StereotypeModelElements
+	
+def StereotypeListNameSG = StereotypeListSG.collect{ iter -> 
+		if (iter ==~ null)
+			return iter[0].getName()}	// Take the list of Stereotypes Names
+
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the security smells knowledge model diagram
+def Sskm = []
+Diag.each{ diag ->  													
+	if (diag.getName() == "Security Smells Model")
+		Sskm.add(diag)
+}
+def SSKM =Sskm[0]
+def ss = SSKM.toDiagramElementArray() 
+//Take the elements from the system model diagram and save them in an array
+def ssmod = ss.collect { el ->
+    return el.getMetaModelElement() 
+}	
+//Take all the associations of the diagram and save them into an array
+def SSassociation =[]
+for (i=0; i<ssmod.size(); i++){
+	if (ssmod[i].getModelType() == "Association"){
+		SSassociation.add(ssmod[i])
+	}
+}
+
+//Take the names of all the SS in the SSMK
+def SSnames=[]
+
+for (i=0; i<ssmod.size(); i++){
+	if (ssmod[i].hasStereotype("Security Smell")){
+		SecuritySmells.add(ssmod[i])
+		SSnames.add(ssmod[i].getName())
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function which returns the position of a microservice in the microservice array given its name
+def findMS(micro, name){
+	for (i=0; i<micro.size(); i++){
+		if (micro[i].getName()==name)
+			return i
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in an array given its name
+def presence(els, name){
+	for (i=0; i<els.size(); i++){
+		if (els[i].getName() == name)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in a string array given its name
+def namepresence(sels, name){
+	for (i=0; i<sels.size(); i++){
+		if (sels[i] == name)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in an array given its stereotype
+def presenceSter(els, stereotype){
+	for (i=0; i<els.size(); i++){
+		if (els[i].toStereotypeModelArray()[0].getName() == stereotype)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+
+def createAssocSIG (main, fromi, fromj, toi, toj, NewSG, NewSGShape, SIG, diagramManager, MODEL){ 
+	def assoc = IModelElementFactory.instance().createGeneralization()	//Create the generalization
+	MODEL.addChild(assoc)
+	assoc.setFrom(NewSG[fromi][fromj])
+	assoc.setTo(NewSG[toi][toj])
+	//Add the stereotype according to the type
+	if (NewSG[fromi][fromj].toStereotypeModelArray()[0].getName()  contains  "Functional"){ 
+		if (main == true) 
+			assoc.addStereotype("F")
+		else
+			assoc.addStereotype("f")
+	}
+	else{
+		if (main == true)
+			assoc.addStereotype("S")
+		else
+			assoc.addStereotype("s")
+	}
+	//add the connection to the diagram
+	def ppp= diagramManager.createConnector(SIG, assoc, NewSGShape[fromi][fromj], NewSGShape[toi][toj], null)
+	ppp.setRequestResetCaption(true);
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to create a new node of the subgraph
+def createNode(i, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager){
+	el = IModelElementFactory.instance().createClass()	//Create the class object
+	el.setName(SGListName[i])//Set the name from the previous list
+	at = IModelElementFactory.instance().createAttribute()	//Create an attribute with the name of the softgoal
+	at.setName(SGList[i].toChildArray()[0].getName())		
+	el.addChild(at)
+	at1 = IModelElementFactory.instance().createAttribute()	//Create another attribute with the name of the Main SG it belongs (or Main)
+	at1.setName(SGList[i].toChildArray()[1].getName())								
+	el.addChild(at1)
+	el.addStereotype(SGList[i].toStereotypeModelArray()[0].getName())	//Add the correct stereotype
+	NewSG.add(el)
+	newPackage.addChild(el)		//Add the just created class to the correct package
+	def e1 = diagramManager.createDiagramElement(REF, el);	//Add the class to the diagram
+	NewSGShape.add(e1)			//Add the class to the Array of the elements (classes) of the current diagram
+	return NewSG.size()-1		//Return the position of this class in the array contain all the classes of the new diagra,
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to create a new arch (of type generalization) in the subgraph
+def createGen(i, j, SGList, REF, newPackage, NewSG, NewSGShape, diagramManager, ster){
+	def assoc = IModelElementFactory.instance().createGeneralization()	//Create the association
+	newPackage.addChild(assoc)
+	assoc.setFrom(NewSG[j])
+	assoc.setTo(NewSG[i])
+	assoc.addStereotype(ster)
+	def ppp= diagramManager.createConnector(REF, assoc, NewSGShape[j], NewSGShape[i], null)
+	ppp.setRequestResetCaption(true);
+	
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to create a new arch (of type association) in the subgraph
+def createAssoc(i, j, REF, newPackage, NewSG, NewSGShape, diagramManager,old, ster, superclass, vetassoc){
+	def assoc = IModelElementFactory.instance().createAssociation()	//Create the assocociation
+	newPackage.addChild(assoc)
+	assoc.setFrom(NewSG[j])
+	assoc.setTo(NewSG[i])
+	if (superclass == true || old == "F" || old == "S"){	//It check if the influence is direct or indirect
+		if (ster == "f+" || ster == "f++" || ster == "F+")
+			ster = "F+"
+		if (ster == "f-" || ster == "f--" || ster == "F-")
+			ster = "F-"
+		if (ster == "s+" || ster == "s++" || ster == "S+")
+			ster = "S+"
+		if (ster == "s-" || ster == "s--" || ster == "S-")
+			ster = "S-"
+	}
+	assoc.addStereotype(ster)
+	vetassoc.add(assoc)
+	def ppp= diagramManager.createConnector(REF, assoc, NewSGShape[j], NewSGShape[i], null)
+	ppp.setRequestResetCaption(true);
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+/* function to extend the subgraph of the SGs from a MS with arrows which will connect them with the 
+	same SGs (or children/father ones) of MSs not directly dependent, but taht could be indirectly affected by them
+	it follow a sort of DFS visit of the MSM diagram starting from a specific SG of a MS.
+	The nodes will be the classes (Microservices) of the Micor Service Model
+*/
+def createIndAssoc (i, node1, relf, sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, microservicesName, microservices, MODEL){
+	def firstlevel =[]	
+	for (j=0; j<relf.size(); j++)
+			firstlevel.add(relf[j].getOppositeEnd().getModelElement())	//the direct children of each class
+	def vis=[]	//visited nodes
+	def index = 0
+	def stack =[node1]	// the stack with the given radix
+	while (stack.size()>0) {	//until the stack isn't empty
+		def node = stack.pop()	//take a node	
+		if (microservicesName[i] != node.getName()){	//if the node isn't the radix one
+			for (a=0; a< microservicesName.size(); a++){	//take its index in the list of elements of its diagram
+					if (microservicesName[a] == node.getName()){
+						index = a
+						break
+					}
+			}
+			if (vis.contains(microservices[index]) == false){	//if it wasn't seen yet
+				if (firstlevel.contains(microservices[index])){	//if it is not in the list of direct children of the node
+					for (d=0; d<relFrom[index].size(); d++){	//foreach child
+						def el = relFrom[index][d].getOppositeEnd().getModelElement()
+							if(vis.contains(el) == false)	//if the child wasn't seen yet
+							stack.add(el) //add it to the stack
+					}
+				}
+				else{
+					for (x=0; x<NewSG[i].size(); x++){	//Take the elements "belonging" to the popped node class (already created in the SIG)
+						attr = NewSG[i][x].toChildArray()
+						father = attr[1].getName()	//Main SG or "Main"
+						sg1 = attr[0].getName()		//SG
+						main = false
+						if (father == "Main")	//check if the SG of the element is a Main one
+							main = true
+						for(k=0; k<NewSG[index].size(); k++){	// For each elements of the new SIG diagram check if we could construct an association
+							attr1 = NewSG[index][k].toChildArray()	//Take the info of the el
+							if (main == true){	//if SG of the selected class is a Main one
+								if (attr1[0].getName() == sg1)	// if they have both Main SGs
+									createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the association between the two classes
+								else{	
+									if (attr1[1].getName() == sg1)	//if they share the Main SG
+										createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+									}
+							}
+							else{
+								if (attr1[0].getName() == father)	//if the second element is a main one and it is the same as the other
+									createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+								if (attr1[0].getName() == sg1)	//if they are the exact same SG
+									createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL) //create the association between the two classes
+								}
+						}
+					}
+				for (d=0; d<relFrom[index].size(); d++)
+					stack.add(relFrom[index][d].getOppositeEnd().getModelElement())	//Add the children of the popped node to the stack
+				}
+			}	
+		}
+		else{	//if the popped one is the radix
+			for (j=0; j<relf.size(); j++)
+				stack.add(relf[j].getOppositeEnd().getModelElement())		//Add the children of the popped node to the stack
+		}
+		vis.add(node)	//Add the popped node to the list of visited ones
+	}
+
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+// Function to find the features of a SG by scannig the SoftGoals diagram
+def searchAttr (nodo, sgmod){
+	def father = nodo.getName()
+	def main = false
+	def sg1 = nodo.toChildArray()[0].getName()
+	sgmod.each{ s -> if (s.getName() == sg1){
+		if (s.toStereotypeModelArray()[0].getName() contains "Main"){
+			main = true
+			father = s.getName()
+		}
+		else
+			father = s.getParent().getName()
+		}
+	}
+	return [father, main]
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+//main function to create the SIG
+
+def SIGcreation (diagramManager, MODEL, NewClassesNames, relFrom, microservices, microservicesName, AttributeList, StList, sgmod){
+	//create a new (class) diagram
+	def DD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)
+
+	DD.setName("SIG")
+
+	diagramManager.openDiagram(DD)
+
+	def NewSG = []	//List of elements in this new diagram
+	def NewSGShape =[] 
+
+	def SIG = diagramManager.getActiveDiagram()	//take the diagram
+
+	MODEL.addSubDiagram(SIG)	//add the diagram to the current model
+
+	//for each SG detected in the previous part generate a node in the new diagram
+	for (i=0; i<NewClassesNames.size(); i++){
+		elms =[]
+		elms1 =[]
+		for (j=0; j<NewClassesNames[i].size(); j++){
+			el = IModelElementFactory.instance().createClass()	//Create the class object
+			el.setName(NewClassesNames[i][j])									//Set the name from the previous list
+			at = IModelElementFactory.instance().createAttribute()			//Create an attribute (name of SG)
+			at.setName(AttributeList[i][j])									//Give the attribute the name it has before and add it to the class
+			el.addChild(at)
+			attr = searchAttr(el, sgmod)
+			at1 = IModelElementFactory.instance().createAttribute()			//Create another attribute 
+			if (attr[1])
+				at1.setName("Main")							//Call it "Main" if the SG is a Main one								
+			else
+				at1.setName(attr[0])						//Call it with ne name of its Main SG
+			el.addChild(at1)							//Add it to the class
+			el.addStereotype(StList[i][j])		//Add the correspondent stereotype
+			elms.add(el)						
+			MODEL.addChild(el)					//add it to the model
+			def e1 = diagramManager.createDiagramElement(SIG, el);	//add it to the diagram
+			elms1.add(e1)
+		}
+		NewSG.add(elms)	//add it to the matrix of elements of the new diagram (a row for each ms)
+		NewSGShape.add(elms1)
+	}
+
+	//--------------------------------------------------------------------------------------------------------------------------------//
+	//Main cycle to crerate the SIG (only directed associations) with a scan of the MSM model and SIG model
+	for (i=0; i< relFrom.size(); i++){		//Scan the list of relations (it has the same size of the element list NewSG
+		
+		for (x=0; x<NewSG[i].size(); x++){		//Take the elements "belonging" to the selected class
+			attr = NewSG[i][x].toChildArray()
+			father = attr[1].getName()	//Main SG or "Main"
+			sg1 = attr[0].getName()		//SG
+			main = false
+			if (father == "Main")	//check if the SG is a Main one or not
+				main = true
+			for (j=0; j<relFrom[i].size(); j++){	//for each child of the MS class 
+				point = relFrom[i][j].getOppositeEnd().getModelElement() 
+				index = 0
+				founded = false
+				for (a=0; a< microservicesName.size(); a++){
+					if (microservicesName[a] == point.getName()){	//check the index of the child in the MSM diagram
+						index =a
+						founded = true
+						break
+					}
+				}
+				if (founded){
+					for(k=0; k<NewSG[index].size(); k++){	// For each class of the SIG derived from the founded MS
+						attr1 = NewSG[index][k].toChildArray() 
+						if (main == true){	//if the SG of the first class is a Main one
+							if (attr1[0].getName() == sg1)	//if the second one is a Main as wee and they are the same
+								createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)	//create the connection in SIG
+							else{	// if the Main SG of the second class is the same as the one of the first one
+								if (attr1[1].getName() == sg1)
+									createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+								}
+						}
+						else{
+							if (attr1[0].getName() == father)	//if the second element has a Main SG equals to the one of the first class
+								createAssocSIG(true, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+							if (attr1[0].getName() == sg1)	//if they have the exactly same SG
+								createAssocSIG(false, index, k, i, x, NewSG, NewSGShape, SIG, diagramManager, MODEL)//create the connection in SIG
+						}
+					}
+				}
+			}
+		}
+	}
+
+	//--------------------------------------------------------------------------------------------------------------------------------//
+	//Main cycle to crerate the indirected connection in the SIG
+	for (i=0; i< relFrom.size(); i++){
+		if (relFrom[i].size()>0)
+		createIndAssoc(i, microservices[i], relFrom[i], sgmod, relFrom, NewSG, NewSGShape, SIG, diagramManager, microservicesName, microservices, MODEL)
+	}
+
+	diagramManager.layout(SIG, diagramManager.LAYOUT_COMPACT)	//Adjust the Layout	
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to take the information about the SS
+def SSsearch(SecSmell){
+	def MSmethod = [] //list of methods/MS Components of MS affected by the SS
+	def features = [] //list of features of a AM/AA to be affected by the SS
+	def SecSG = []	//list of security softgoals theatened by the SS
+	def Related = SecSmell.toToRelationshipEndArray()
+	def prov = []
+	def sup = []
+	def usr = false
+	def typeof = 0
+	for (i3=0; i3<Related.size(); i3++){	
+		el = Related[i3].getOppositeEnd().getModelElement()
+		if (el.hasStereotype("Abstract MicroService")) {
+			sup=el.toChildArray()	// the attributes of the AM
+			for (j=0; j<sup.size(); j++){
+				if (sup[j].hasStereotype("Method"))
+					MSmethod.add(sup[j].getName())
+				else 
+				{
+					if (sup[j].getName()=="SKIP")
+						features.add(sup[j].getName())
+					else if (sup[j].toStereotypeModelArray()[0].getName() == "User contact")
+						usr=true
+					else if (sup[j].toStereotypeModelArray()[0].getName() == "Info")
+						features.add(sup[j].getName())
+					else
+						features.add(sup[j].toStereotypeModelArray()[0].getName())
+				}
+			}
+			if (MSmethod.size()==0){
+				if (el.toToRelationshipEndArray().size()>0){ //if the AM has a MC
+					mc = el.toToRelationshipEndArray()[0].getOppositeEnd().getModelElement()
+					MSmethod.add(mc.getName())
+				}
+				else
+					return [typeof, usr, features, MSmethod, SecSG] // case of undescribed SS
+			}
+		}
+		
+		else if (el.hasStereotype("Abstract Association")){ //if the SS is on the connection channels
+			typeof = 1
+		    sup=el.toChildArray()	// the attributes of the AM
+			for (j=0; j<sup.size(); j++)
+				features.add(sup[j].getName())
+		}
+		
+		else if (el.hasStereotype("Main Security SoftGoal")){ //the threatens SG (and their children)
+			prov.add(el.getName())
+			children = el.toChildArray()
+			for (j=0; j<children.size(); j++)
+				prov.add(children[j].getName())
+			SecSG.add(prov)
+		}
+	}
+	return [typeof, usr, features, MSmethod, SecSG]
+}	    
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to retrieve the security SG of a single MS
+def MicroServiceSG(Msattr){
+	SecuritySoftGoals = []
+	for (ss1=0; ss1<Msattr.size(); ss1++){
+		if (Msattr[ss1].hasStereotype("Security SoftGoal"))
+			SecuritySoftGoals.add(Msattr[ss1].getName())
+	}
+	return SecuritySoftGoals
+}
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to retrieve the SG of a coulpe of MS
+def CoupleSG(MS1, MS2, allMS){
+	SecuritySoftGoals = []
+	if ((presence(allMS, MS1.getName())) && !(presence(allMS, MS2.getName())))
+		return MicroServiceSG(MS1.toChildArray())
+	if ((presence(allMS, MS2.getName())) && !(presence(allMS, MS1.getName())))
+		return MicroServiceSG(MS2.toChildArray())
+	else {
+		ms1a = MicroServiceSG(MS1.toChildArray())
+		ms2a = MicroServiceSG(MS2.toChildArray())
+		SecuritySoftGoals = MicroServiceSG(MS2.toChildArray())
+		for (ss2=0; ss2<ms1a.size(); ss2++){
+			if (namepresence(ms2a, ms1a[ss2]) == false)
+				SecuritySoftGoals.add(ms1a[ss2])
+		}
+	}
+	return SecuritySoftGoals
+}
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to check if a microservices affected by SS has related security softgoals (case AM)
+def checkSG(MicSG, ssSG){
+	sum = 0
+	index = 0
+	array = [] 
+	for (o=0; o<ssSG.size(); o++)	//control array
+		array.add(0)
+	for (e1=0; e1<MicSG.size(); e1++){
+		while (index < ssSG.size()){
+			if (array[index] == 0 && namepresence(ssSG[index], MicSG[e1])){
+				array[index] = 1
+				sum+=1
+				break
+			}
+			else
+				index++
+		}
+	}
+	if (sum >= ssSG.size())
+		return true
+	else
+		return false
+	}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to check if microservices with external contactshave the correct method to avoid the SS
+def checkExt (ElUSR, method, type){
+	MSList = []
+	micros = ElUSR.toToRelationshipEndArray()
+	for (m=0; m<micros.size(); m++){
+		Mic = micros[m].getOppositeEnd().getModelElement()
+		attrib = Mic.toChildArray()
+		if (type == 0){
+			if (!(presence(attrib, method))) 
+				MSList.add(Mic)	
+		}			
+		else{
+			if (presence(attrib, method)) 
+				MSList.add(Mic)
+		}	
+	}
+	return MSList
+}	
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main function
+def detection(SS, MS, USR, LINKS, systSecSG){
+	
+	def microservices = [SS.getName()] //list of microservice with the actual SS
+	def problematicMS = [] //list of microservice with the actual SS and the filter on SG
+	def SSanalysis = SSsearch(SS)
+	def typeof = SSanalysis[0]
+	def userC = SSanalysis[1]
+	def feat = SSanalysis[2]
+	def method = SSanalysis[3]
+	def secSG = SSanalysis[4]
+	def foundMethod = false
+	def foundComp = false
+	
+	if (feat[0]=="SKIP")
+		return [microservices, problematicMS]	// only the name of the affected MS (eventualmente ricerca almeno dei SG)
+	
+	
+	if (typeof == 0){	// case AM
+		if (userC){		// case of MS with external interactions
+			if (feat.size()>0){// multiple authentication points
+				problematicMS.add("all")
+				supmicro = []
+				sgcheck = checkSG(systSecSG, secSG)
+				for (u=0;u<USR.size(); u++){
+					supplist = checkExt(USR[u], method[0], 1)
+					for (i0=0; i0<supplist.size(); i0++)
+						supmicro.add(supplist[i0])
+				}
+				if (supmicro.size()>1){
+					for (i1 =0 ; i1< supmicro.size(); i1++){
+						microservices.add(supmicro[i1].getName())
+						if (sgcheck)
+							problematicMS.add(supmicro[i1].getName())
+					}
+				}
+			}
+			else{		//external authorization
+				supmicro = []
+				for (u=0;u<USR.size(); u++){
+					supplist = checkExt(USR[u], method[0], 0)
+
+					for (i0=0; i0<supplist.size(); i0++)
+						supmicro.add(supplist[i0])
+				}
+				for (i1 =0 ; i1< supmicro.size(); i1++){
+						microservices.add(supmicro[i1].getName())
+						if (checkSG(MicroServiceSG(supmicro[i1].toChildArray()), secSG))
+							problematicMS.add(supmicro[i1].getName())
+				}
+			}
+		}
+		else{
+			for (k=0; k<MS.size(); k++){
+				MSels = MS[k].toChildArray()
+				foundMethod = false
+				foundMethod = presence(MSels, method[0])	//search for the presence of the required method/component
+				if (foundMethod == false){
+					if (feat.size()==0){	//Access control
+						microservices.add(MS[k].getName())
+						if (checkSG(MicroServiceSG(MSels), secSG))
+						problematicMS.add(MS[k].getName())
+					}
+					else{
+						if ((presenceSter(MSels, feat[0]))){	//Non-encrypted data exposure & Hardcoded Secrects
+							microservices.add(MS[k].getName())
+							if (checkSG(MicroServiceSG(MSels), secSG))
+								problematicMS.add(MS[k].getName())
+						}			
+					}
+				}
+				else {
+					if (feat.size() > 2){
+						index1 = findMS(MSels, method[0])
+						MSalg = MSels[index1].toChildArray()[0]
+						if (!(namepresence(feat, MSalg.getName()))){	//Own Cryptocode
+							microservices.add(MS[k].getName())
+							if (checkSG(MicroServiceSG(MSels), secSG))
+							problematicMS.add(MS[k].getName())
+						}
+					}
+				}	
+			}
+		}
+	}
+	
+	else {	// case AA
+		for (s1=0; s1<LINKS.size(); s1++){	//Not secured communication and Unauthenicated traffic
+			if (LINKS[s1].hasStereotype(feat[0]) == false ){
+				ms1 = LINKS[s1].getTo()
+				ms2 = LINKS[s1].getFrom()
+				microservices.add(ms1.getName() + "~" + ms2.getName())
+				if (checkSG(CoupleSG(ms1, ms2, MS), secSG))
+					problematicMS.add(ms1.getName() + "~" +  ms2.getName())
+			}
+		}
+	}	
+	return [microservices, problematicMS]	//the return are the list of detected microservices with and without the filter on SG
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to find and generate the subgraph following the relation between MS and between SG doing a DFS on the SIG diagram
+def findSG(i, relFrom, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype, ster, superclass, vetassoc){
+	def vis=[]		//visited nodes
+	def index =0	//index of the current node in the list of SIG classes
+	if (!(presence(NewSG, SGListName[i]))){ 
+		def stack =[SGList[i]]		//stack initialized with the root we give as input
+		def newindex = createNode(i, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//add the root to the new diagram
+		def rootindex = newindex
+		while (stack.size()>0) {	//until the stack is empty
+			def node = stack.pop()
+			if (SGListName[i] != node.getName()){	//if the popped node is not the root of the graph
+				for (a=0; a< SGListName.size(); a++){	//find the index of the popped node in the SIG
+					if (SGListName[a] == node.getName()){
+						index = a
+						break
+					}
+				}
+				if (vis.contains(SGList[index]) == false){	//if the popped node wasn't already visited
+					for (a=0; a<NewSG.size(); a++){	//find the index of the popped node in this new diagram
+						if (NewSG[a].getName() == node.getName()){
+							newindex = a
+							break
+						}
+					}
+					for (d=0; d<relFrom[index].size(); d++){	//for each child of the poopped node
+						def childindex=0
+						for (a=0; a <SGListName.size(); a++){	//find its index in the SIG
+							if (SGListName[a] == relFrom[index][d].getFrom().getName()){
+								childindex = a
+								break
+							}
+						}
+						//if the child is not present in the new diagram yet
+						if (stack.contains(SGList[childindex])== false && vis.contains(SGList[childindex])== false && presence(NewSG, SGList[childindex].getName()) == false){
+							newchild = createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create the node in the new diagram
+							def old = ""
+							for (k=0; k<assoctype.size(); k++){	//find the stereotype of the association in the SIG
+								if (assoctype[k].getFrom() == SGList[childindex] && assoctype[k].getTo() == SGList[index]){
+									old = assoctype[k].toStereotypeModelArray()[0].getName()
+								break
+								}	
+							}
+							//create the association and add it to the new diagram
+							createAssoc(newindex, newchild, REF, newPackage, NewSG, NewSGShape, diagramManager, old, ster, superclass, vetassoc)
+							//add the just created node to the stack
+							stack.add(relFrom[index][d].getFrom())
+						}
+						else{	//if the node is already in the diagram
+							for (a=0; a <NewSG.size(); a++){	//find its index in the list of elements of the new diagram
+								if (NewSG[a].getName() == relFrom[index][d].getFrom().getName()){
+									newchild = a
+									break
+									}
+								}
+							pres = false
+							for (k=0; k<vetassoc.size(); k++){	//check if the association with its father already exist
+								if (vetassoc[k].getFrom().getName() == SGList[childindex].getName() && vetassoc[k].getTo().getName() == SGList[index].getName()){
+									pres=true
+									break
+								}
+							}
+							if (pres == false){	//if the association doesn't exist
+								def old = ""
+								for (k=0; k<assoctype.size(); k++){	//find its stereotype in SIG
+									if (assoctype[k].getFrom() == SGList[childindex] && assoctype[k].getTo() == SGList[index]){
+										old = assoctype[k].toStereotypeModelArray()[0].getName()
+									break
+									}	
+								}
+								//create the association
+								createAssoc(newindex, newchild, REF, newPackage, NewSG, NewSGShape, diagramManager, old, ster, superclass, vetassoc)
+								//add the just created node to the stack
+								stack.add(relFrom[index][d].getFrom())
+							}
+						}	
+					}
+				}	
+			}
+			else{//the node is the root of the new diagram
+				for (d=0; d<relFrom[i].size(); d++){	//for each "child" of the node
+					def childindex=0
+					for (a=0; a <SGListName.size(); a++){	//find the index in the list of SIG element
+						if (SGListName[a] == relFrom[i][d].getFrom().getName()){
+							childindex = a
+							break
+						}
+					}
+					if (presence(NewSG, SGList[childindex].getName())==false){	//if the node isn't already in the new diagram
+						newchild = createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create the node
+						def old = ""
+						for (k=0; k<assoctype.size(); k++){		//find the stereotype of the arrow which connect from the root
+							if (assoctype[k].getFrom() == SGList[childindex] && assoctype[k].getTo() == SGList[i]){
+								old = assoctype[k].toStereotypeModelArray()[0].getName()
+							break
+							}	
+						}
+						//create the association with this new node and add in the new diagram
+						createAssoc(newindex, newchild, REF, newPackage, NewSG, NewSGShape, diagramManager, old, ster, superclass, vetassoc)
+						stack.add(relFrom[i][d].getFrom())		//add the new class to the stack
+					}
+					else{//if the node is altready in the diagram
+						for (a=0; a <NewSG.size(); a++){	//find its index in the array of the elments of the new diagram
+							if (NewSG[a].getName() == relFrom[i][d].getFrom().getName()){
+								newchild = a
+								break
+								}
+							}
+						def pres = false
+						for (k=0; k<vetassoc.size(); k++){	//find if the node is aready connected in the new diagram
+							if (vetassoc[k].getFrom().getName() == SGList[childindex].getName() && vetassoc[k].getTo().getName() == SGList[i].getName()){
+								pres=true
+								break
+							}
+						}
+						if (pres == false){ //if this association doesn't exist
+							def old = ""
+							for (k=0; k<assoctype.size(); k++){	//find the stereotype of this association in the SIG
+								if (assoctype[k].getFrom() == SGList[childindex] && assoctype[k].getTo() == SGList[i]){
+									old = assoctype[k].toStereotypeModelArray()[0].getName()
+								break
+								}	
+							}
+							//create the association
+							createAssoc(newindex, newchild, REF, newPackage, NewSG, NewSGShape, diagramManager, old, ster, superclass, vetassoc)
+							stack.add(relFrom[i][d].getFrom())	//add the new node to the stack
+						}
+					}
+				}		
+			}
+		vis.add(node)	//add the popped node to the list of visited ones
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to find and generate subgraphs from SG not present in the refactored MS but in one of MSs depending on it
+def findIndirect(micros, SGList, SolEl, SolElShape, SOL, relFrom, SGListName, solPackage, diagramManager, ssmod, assoctype, SGsol, vetassoc){
+	for (j=0; j< SGList.size(); j++){
+		for (k=0; k< micros.size(); k++){
+			if (SGListName[j].contains(micros[k].getName())){
+				if (presence(SolEl, SGList[j].getName()) == false){
+					prop = SGList[j].toChildArray()
+					if (prop[1] == "Main"){		//if the SG of the node is a Main one
+						if (SGsol[1] == prop[0].getName())	//check if the main one of the one affected by the refactoring is the same
+							findSG(j, relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[3], true, vetassoc)
+					}
+					else{		
+						if (SGsol[1] == prop[1].getName()){	//check if the main one of the one affected by the refactoring is the same
+							if (prop[0].getName() == SGsol[2])  //check if the SGs are the same
+								findSG(j, relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[3], false, vetassoc)
+							else{
+								if (prop[1].getName() == SGsol[2])	//check if the softgoal of the refactoring is a main one
+									findSG(j, relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[3], true, vetassoc)
+							}
+						} 
+					}
+				}
+			}
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+// function to create the subgraph of the SIG with the a specific class as root (and generalizations as arrows) using a DFS visit of SIG
+//it is called to construct the diagram related to each MS (all its SGs as roots)
+def findSubGraphOld(i, relFrom, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype){
+	def vis=[]	//list of visited nodes
+	def index =0
+	if (!(presence(NewSG, SGListName[i]))){
+		def stack =[SGList[i]]	//stack initialized with the given root
+		def newindex = createNode(i, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create and add the root node to the new diagram
+		def rootindex = newindex
+		while (stack.size()>0) {	//while the stack isn't empty
+			def node = stack.pop()	
+			if (SGListName[i] != node.getName()){	//if the node popped is not the root
+				for (a=0; a< SGListName.size(); a++){	//find the index of the pooped node in the array of SIG elements
+					if (SGListName[a] == node.getName()){
+						index = a
+						break
+					}
+				}
+				if (vis.contains(SGList[index]) == false){	//if the popped nde wasn't already seen
+					for (a=0; a<NewSG.size(); a++){		//find its index in the new diagram array of elements
+						if (NewSG[a].getName() == node.getName()){
+							newindex = a
+							break
+						}
+					}
+					for (d=0; d<relFrom[index].size(); d++){	//for each child
+						def childindex=0
+						for (a=0; a <SGListName.size(); a++){	//find its index in the SIG array of elements
+							if (SGListName[a] == relFrom[index][d].getFrom().getName()){
+								childindex = a
+								break
+							}
+						}
+						if (stack.contains(SGList[childindex])== false && vis.contains(SGList[childindex])== false){	//if the element is not already in the diagram
+							newchild=createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create the node and add to the new diagram
+							stack.add(relFrom[index][d].getFrom())	//add the just created node to the stack
+						}
+						else{	//if the child is already in the diagram
+							for (a=0; a <NewSG.size(); a++){	//find its index in the array of element of the new diagram
+							if (NewSG[a].getName() == relFrom[index][d].getFrom().getName()){
+								newchild = a
+								break
+								}
+							}
+						}
+						def ster = ""
+						for (k=0; k<assoctype.size(); k++){	//find the sterotype of the arrow with its father in the SIG
+							if (assoctype[k].getFrom() == SGList[ childindex] && assoctype[k].getTo() == SGList[index]){
+								ster = assoctype[k].toStereotypeModelArray()[0].getName()
+							break
+							}	
+						}
+						//create the generalization in the new diagram
+						createGen(newindex, newchild, SGList, REF, newPackage, NewSG, NewSGShape, diagramManager, ster)
+						}
+				}	
+			}
+			else{	//if the popped node is the root
+				for (d=0; d<relFrom[i].size(); d++){	//for each child
+					def childindex=0
+					for (a=0; a <SGListName.size(); a++){	//find its index in the SIG array of elements
+						if (SGListName[a] == relFrom[i][d].getFrom().getName()){
+							childindex = a
+							break
+						}
+					}
+					//create the node in the new diagram
+					newchild = createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)
+					def ster = ""
+					for (k=0; k<assoctype.size(); k++){	//find the stereotype of the arrow with the father in the SIG
+						if (assoctype[k].getFrom() == SGList[ childindex] && assoctype[k].getTo() == SGList[i]){
+							ster = assoctype[k].toStereotypeModelArray()[0].getName()
+						break
+						}	
+					}
+					//create the generalization in the new diagram
+					createGen(newindex, newchild, SGList, REF, newPackage, NewSG, NewSGShape, diagramManager, ster)
+					stack.add(relFrom[i][d].getFrom())	//add the child node to the stack
+				}		
+			}
+			vis.add(node)	//add the popped node to the list of visited ones
+		}
+	}
+}
+
+// function to create the subgraph of the SIG with the a specific class as root (and generalizations as arrows) using a DFS visit of SIG
+//it is called to construct the diagram related to each MS (all its SGs as roots)
+def findSubGraph(i, relFrom, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype){
+	def vis=[]	//list of visited nodes
+	def index =0
+	def prova =[]
+	if (!(presence(NewSG, SGListName[i]))){
+		def stack =[SGList[i]]	//stack initialized with the given root
+		def newindex = createNode(i, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create and add the root node to the new diagram
+		def rootindex = newindex
+		while (stack.size()>0) {	//while the stack isn't empty
+			def node = stack.pop()	
+			if (SGListName[i] != node.getName()){	//if the node popped is not the root
+				for (a=0; a< SGListName.size(); a++){	//find the index of the pooped node in the array of SIG elements
+					if (SGListName[a] == node.getName()){
+						index = a
+						break
+					}
+				}
+				if (vis.contains(SGList[index]) == false){	//if the popped nde wasn't already seen
+					for (a=0; a<NewSG.size(); a++){		//find its index in the new diagram array of elements
+						if (NewSG[a].getName() == node.getName()){
+							newindex = a
+							break
+						}
+					}
+					for (d=0; d<relFrom[index].size(); d++){	//for each child
+						def childindex=0
+						for (a=0; a <SGListName.size(); a++){	//find its index in the SIG array of elements
+							if (SGListName[a] == relFrom[index][d].getFrom().getName()){
+								childindex = a
+								break
+							}
+						}
+						if (stack.contains(SGList[childindex])== false && vis.contains(SGList[childindex])== false ){	//if the element is not already in the diagram
+							if ((presence(NewSG, SGListName[childindex]))){
+								newchild = findMS(NewSG, SGListName[childindex])
+							}
+							else{
+								newchild=createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)	//create the node and add to the new diagram
+								stack.add(relFrom[index][d].getFrom())	//add the just created node to the stack
+							}
+						}
+						else{	//if the child is already in the diagram
+							for (a=0; a <NewSG.size(); a++){	//find its index in the array of element of the new diagram
+							if (NewSG[a].getName() == relFrom[index][d].getFrom().getName()){
+								newchild = a
+								break
+								}
+							}
+						}
+						def ster = ""
+						for (k=0; k<assoctype.size(); k++){	//find the sterotype of the arrow with its father in the SIG
+							if (assoctype[k].getFrom() == SGList[ childindex] && assoctype[k].getTo() == SGList[index]){
+								ster = assoctype[k].toStereotypeModelArray()[0].getName()
+							break
+							}	
+						}
+						//create the generalization in the new diagram
+		
+						createGen(newindex, newchild, SGList, REF, newPackage, NewSG, NewSGShape, diagramManager, ster)
+						}
+				}	
+			}
+			else{	//if the popped node is the root
+				for (d=0; d<relFrom[i].size(); d++){	//for each child
+					def childindex=0
+					for (a=0; a <SGListName.size(); a++){	//find its index in the SIG array of elements
+						if (SGListName[a] == relFrom[i][d].getFrom().getName()){
+							childindex = a
+							break
+						}
+					}
+					//create the node in the new diagram
+					if (!(presence(NewSG,SGListName[childindex]))){
+						newchild = createNode(childindex, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager)
+						def ster = ""
+						for (k=0; k<assoctype.size(); k++){	//find the stereotype of the arrow with the father in the SIG
+							if (assoctype[k].getFrom() == SGList[ childindex] && assoctype[k].getTo() == SGList[i]){
+								ster = assoctype[k].toStereotypeModelArray()[0].getName()
+							break
+							}	
+						}
+						//create the generalization in the new diagram
+						createGen(newindex, newchild, SGList, REF, newPackage, NewSG, NewSGShape, diagramManager, ster)
+						stack.add(relFrom[i][d].getFrom())	//add the child node to the stack
+					}
+				}		
+			}
+			vis.add(node)	//add the popped node to the list of visited ones
+		}
+	}
+	return prova
+}
+//--------------------------------------------------------------------------------------------------------------------------------//
+//DFS visit to (Microservice System Model) diagram starting from a given node
+def DFS(i, nodes){	//
+	def vis=[]
+	def stack = [nodes[i]]
+	def control = true
+	while (stack.size() >0){
+		node = stack.pop()
+		childs = node.toFromRelationshipEndArray()
+		for (i=0; i<childs.size(); i++){
+			child = childs[i].getOppositeEnd().getModelElement()
+			if (vis.contains(child) == false && stack.contains(child)==false)
+				stack.add(child)
+		}
+		if (control == true)
+			control= false
+		else
+			vis.add(node)
+	}
+	return vis	//return the list of visited nodes
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to generate the subdiagram of a particular refactoring solution applied to specific microservices
+def fun(micros, SGsol, root, relFrom, SGList, SGListName, SOL, SolEl, SolElShape, solPackage, diagramManager, ssmod, assoctype, vetassoc){
+	for (t1=0; t1<SGsol.size(); t1++){	//foreach SGs affected by the solution
+		for (s=0; s<root.size(); s++){	//foreach root of the diagram (SGs of the MS to be refactored)
+			prop = SGList[root[s]].toChildArray()	//take the SG of the root (and its main class)
+			if (prop[1].getName() == "Main"){	//if it is a main SG
+				if (SGsol[t1][1] == prop[0].getName()){	//check if the refactoring affect a SG with the same main SG
+					//generate the subgraph in the new diagram
+					findSG(root[s], relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[t1][3], true, vetassoc)
+					break
+				}
+				else	//find if this SG affects other MSs dependent from the one to be refactored
+					findIndirect(micros, SGList, SolEl, SolElShape, SOL, relFrom, SGListName, solPackage, diagramManager, ssmod, assoctype, SGsol[t1], vetassoc)
+			}
+			else{
+				if (SGsol[t1][1] == prop[1].getName()){	//check if the refactoring SG and the root SG share the main SG
+					if (prop[0].getName() == SGsol[t1][2]){  //if they are exactly the same
+						//generate the subgraph in the new diagram
+						findSG(root[s], relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[t1][3], false, vetassoc)
+						break
+						}
+					else{
+						if (SGsol[t1][2] == prop[1].getName()){	//if the refactoring one is a Main SG
+							//generate the subgraph in the new diagram
+							findSG(root[s], relFrom, SGList, SGListName, SOL, solPackage, SolEl, SolElShape, diagramManager, ssmod, assoctype, SGsol[t1][3], true, vetassoc)
+							break
+						}
+						else	//find if this SG affects other MSs dependent from the one to be refactored
+							findIndirect(micros, SGList, SolEl, SolElShape, SOL, relFrom, SGListName, solPackage, diagramManager, ssmod, assoctype, SGsol[t1], vetassoc)
+					}
+				}
+				else	//find if this SG affects other MSs dependent from the one to be refactored
+					findIndirect(micros, SGList, SolEl, SolElShape, SOL, relFrom, SGListName, solPackage, diagramManager, ssmod, assoctype, SGsol[t1], vetassoc)
+			}
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to add the refactoring solution node to the refactoring subgraph and connect it to each root of each connected component
+def createSolNode(sol, microname, microlist, SGsol, SolEl, SOL, SolElShape, solPackage, diagramManager, vetassoc){
+	def rad=[]		//find roots of the diagram
+	def indexes =[]	//indexes of the roots in the diagram elements array
+	def indexesdir = []
+	for (i2=0; i2<SolEl.size(); i2++){	//construct the previous arrays
+			for (i4=0; i4< microlist.size(); i4++){
+				if (SolEl[i2].getName().contains(microlist[i4])){
+					indexesdir.add(1)
+					rad.add(SolEl[i2])
+					indexes.add(i2)
+					break
+				}
+				else if (SolEl[i2].toFromRelationshipEndArray().size()<=0){
+					rad.add(SolEl[i2])
+					indexes.add(i2)
+					indexesdir.add(0)
+					break
+				}
+		}	
+	}
+	el = IModelElementFactory.instance().createClass()	//Create the class object (refactoring solution node)
+	el.setName(sol + " applied to " + microname) //Set the name as a composition of the refactoring solution name and the microservice/s one
+	el.addStereotype("Refactoring Solution")	//add the correct stereotype
+	SolEl.add(el)							//add the el to the diagram array of el
+	solPackage.addChild(el)					//add the el to the correct package
+	def e1 = diagramManager.createDiagramElement(SOL, el);	//add the el to the diagram
+	SolElShape.add(e1)
+	index = SolEl.size()-1	//take its position in the elements array
+	for (k1=0; k1< rad.size(); k1++){	//for each direct root
+		prop=rad[k1].toChildArray()	//take its SG and its Main SG
+		for (k2=0; k2<SGsol.size(); k2++){	//for each SG affected by the solution
+			if (prop[1].getName() == "Main"){	//if the root SG is a Main one
+				if (SGsol[k2][1] == prop[0].getName()){	//if the SG of the solution has the same Main SG
+					//create the association between the root and the refactoring solution node
+					createAssoc(index, indexes[k1], SOL, solPackage, SolEl, SolElShape, diagramManager, "", SGsol[k2][3], true, vetassoc)
+					break
+				}
+			}
+			else{
+				if (SGsol[k2][1] == prop[1].getName()){	//if the two SGs share the same Main SG
+					if (prop[0].getName() == SGsol[k2][2]){  //if they are actually the same SG
+						if (indexesdir[k1] == 1){	//if the root is an original one (a SG of the refactored MS)
+							//create the association between the root and the refactoring solution node
+							createAssoc(index, indexes[k1], SOL, solPackage, SolEl, SolElShape, diagramManager, "", SGsol[k2][3], false, vetassoc)
+							break
+						}
+						else{
+							//create the association between the root and the refactoring solution node
+							createAssoc(index, indexes[k1], SOL, solPackage, SolEl, SolElShape, diagramManager, "", SGsol[k2][3], true, vetassoc)
+							break
+						}	
+					}
+					else{
+						if (SGsol[k2][2] == prop[1].getName()){	//If the solution SG is a Main one
+							//create the association between the root and the refactoring solution node
+							createAssoc(index, indexes[k1], SOL, solPackage, SolEl, SolElShape, diagramManager, "", SGsol[k2][3], true, vetassoc)
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main function for the refactoring subgraphs Generation
+def subgraphGen(i, SecuritySmell, Microservice, MODEL, diagramManager, ssmod, SSassociation, microservices){
+	//Take SIG diagram
+	if (Microservice.size()>0){
+		def sig = []
+		def Diag =diagramManager.getOpenedDiagrams()
+		Diag.each{diag -> 														
+			if (diag.getName() == "SIG")
+				sig.add(diag)
+		}
+		def SIG = sig[0]
+		def elements = SIG.toDiagramElementArray() 
+
+		def mod = elements.collect { el ->
+			return el.getMetaModelElement() 
+		}		
+
+		def SGList = []	//List of elements as IModelElements (only SG classes)
+		def SGListName = []	//List of elements names (only SG classes)
+		def relFrom = []	//Adjancency List of associations between elements: each entry is the array of the starting elements of the associations
+		// starting from the correspondent element (then we will take the element in the opposit apex)
+
+		//Take the elements (Microservice.SoftGoal) and save them in an array
+		mod.each{ el ->
+			if (el.hasStereotype("Functional SoftGoal") || el.hasStereotype("Security SoftGoal")){
+				SGListName.add(el.getName())
+				SGList.add(el)
+				relFrom.add(el.toToRelationshipArray())
+				} //Construct the previous vectors
+			}
+
+		def assoctype =[]
+		for (j=0; j<mod.size(); j++){
+			if (mod[j].getModelType() == "Generalization")
+				assoctype.add(mod[j])
+		}
+		def alltype = false
+		if (Microservice[0]=="all"){
+			Microservice.remove(0)
+			alltype = true
+			if (Microservice.size() == 0)
+				return
+		}
+		def newPackage = IModelElementFactory.instance().createPackage()	//Create new package for a security smell
+		newPackage.setName(SecuritySmell[i])		//Name the package with ne name of SS
+		MODEL.addChild(newPackage)		//add it to the model				
+		def secsmell
+		for (n=0; n<ssmod.size(); n++){	//take the class related to the SS given as input from the SSKM
+			if (ssmod[n].getName() == SecuritySmell[i])
+				secsmell=ssmod[n]
+		}
+		def rels = secsmell.toToRelationshipEndArray()	//take all the children of this SS
+		def refactoring = []
+		for (l=0; l<rels.size(); l++){	//take the refactorings proposed to solve it by their stereotype in SSKM
+			ref = rels[l].getOppositeEnd().getModelElement()
+			if (ref.hasStereotype("Refactoring"))
+				refactoring.add(ref)
+		}
+		def solution = []
+		for (k=0; k< refactoring.size(); k++){	//take the refactoring solutions proposed in the SSKM to develope the selected refactoring
+			sol = refactoring[k].toToRelationshipArray()
+			for (n=0; n<sol.size(); n++)
+				solution.add(sol[n].getFrom())
+		}
+
+		def SGsol =[]
+		/*generate a structure such that for each solution has a rows of array 
+			each one contains info about the SGs affected: [main , SG, Main SG, ster]
+			- main : true/false if the SG is a main one or not
+			- SG : softgoal affected
+			- Main SG : Main SG of the affectefd SG (eventually itself)
+			- ster : stereotype of the association between the refactoring solution and the SG in the SSKM
+		*/
+		for (g=0; g<solution.size(); g++){
+			def supp=[]						
+			arrival = solution[g].toToRelationshipEndArray()
+			for (h=0; h< arrival.size(); h++){
+				couple =[]
+				el = arrival[h].getOppositeEnd().getModelElement()
+				if (el.toStereotypeModelArray()[0].getName() contains "Main"){
+					couple.add(true)
+					couple.add(el.getName())
+				}
+				else{
+					couple.add(false)
+					couple.add(el.getParent().getName())
+				}
+				couple.add(el.getName())
+				for (d=0; d<SSassociation.size(); d++){
+					if (SSassociation[d].getTo() == solution[g] && SSassociation[d].getFrom() == el){
+						couple.add(SSassociation[d].toStereotypeModelArray()[0].getName())
+						break}
+				}
+				supp.add(couple)
+			}
+			SGsol.add(supp)
+		}
+		//Create the new diagram for each Microservice affected by the securitysmells
+		def roots = []
+		def var = []
+		def vars = []
+		def rootsnames = []
+
+		if (alltype == true){			
+			def DD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new diagram
+			DD.setName("Multiple_MSs")
+			diagramManager.openDiagram(DD)
+			def NewSG = []	//List of elements in this new diagram
+			def NewSGShape =[] 
+			def REF = diagramManager.getActiveDiagram()	//get the new diagram
+			newPackage.addSubDiagram(REF)	//add the diagram to the package of the microservice
+			def microDFS = []	//subgraphs of the influenced microservices (in the system model)
+			def root = []	//roots of the new diagrams
+			def microservicesnames = ""
+			for (jj1=0; jj1<Microservice.size(); jj1++){	//for all microservices
+				root = []	//roots of the new diagrams
+				if (jj1== Microservice.size() -1)
+					microservicesnames = microservicesnames + Microservice[jj1]
+				else
+					microservicesnames = microservicesnames + Microservice[jj1] + ", "
+				microDFS.add([])
+				for (h=0; h<SGList.size(); h++){	//find in the SIG all the SGs of the selected microservice
+					if (SGListName[h].contains(Microservice[jj1])){
+						root.add(h)	//construct the array of indexes of this roots
+						//generate the subgraphs starting from them in SIG and add them to the new diagram
+						findSubGraph(h, relFrom, SGList, SGListName, REF, newPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype)
+					}
+				}
+				diagramManager.layout(REF, diagramManager.LAYOUT_COMPACT)	//adjust the Layout	
+				
+				roots.add(root)	//matrix of indexes of root (a row for each microservice)
+				def suppDFS=DFS(findMS(microservices,Microservice[jj1]), microservices)
+				for (k=0; k< suppDFS.size(); k++)
+					microDFS[jj1].add(suppDFS[k])
+			}
+			for (n=0; n < solution.size(); n++){	//for each possible solution
+				vars.add(solution[n].getName())
+				def solPackage = IModelElementFactory.instance().createPackage()//create a package named after the solution itself
+				solPackage.setName(solution[n].getName())
+				newPackage.addChild(solPackage)	//add the package to the Microservice one
+			
+				def SolD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new (class) diagram
+			
+				SolD.setName(solution[n].getName())	//name it after the solution 
+			
+				diagramManager.openDiagram(SolD)
+			
+				def SolEl = []	//List of elements in this new diagram
+				def SolElShape =[] 
+				def SOL = diagramManager.getActiveDiagram()	//take the diagram
+				vetassoc = []		//all the association in the new diagram
+				solPackage.addSubDiagram(SOL)	//add the diagram to the just created packaga
+				//generate the connected components of the subgraphs
+				for (k3=0; k3<microDFS.size(); k3++){
+					fun(microDFS[k3], SGsol[n], roots[k3], relFrom, SGList, SGListName, SOL, SolEl, SolElShape, solPackage, diagramManager, ssmod, assoctype, vetassoc)
+				}
+
+				createSolNode(solution[n].getName(), microservicesnames, Microservice, SGsol[n], SolEl, SOL, SolElShape, solPackage, diagramManager, vetassoc)
+				diagramManager.layout(SOL, diagramManager.LAYOUT_COMPACT)	//adjust the layout of the diagram
+			
+			}	
+			
+		}
+		else if ( Microservice[0].contains("~")){
+			def MSmultiple =[]
+			for (m=0; m< Microservice.size(); m++){
+				sup= Microservice[m].split("~")
+				def diagPackage = IModelElementFactory.instance().createPackage()	//create a package with its name
+				diagPackage.setName(Microservice[m])
+				newPackage.addChild(diagPackage)	//add the package to the SS package
+				def DD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new diagram
+				DD.setName(Microservice[m])
+				diagramManager.openDiagram(DD)
+				def NewSG = []	//List of elements in this new diagram
+				def NewSGShape =[] 
+				def REF = diagramManager.getActiveDiagram()	//get the new diagram
+				diagPackage.addSubDiagram(REF)	//add the diagram to the package of the microservice
+				def microDFS = []	//subgraphs of the influenced microservices (in the system model)
+				def root = []	//roots of the new diagrams
+				for (jj1=0; jj1<sup.size(); jj1++){	//for all microservices
+					root = []	//roots of the new diagrams
+					microDFS.add([])
+					for (h=0; h<SGList.size(); h++){	//find in the SIG all the SGs of the selected microservice
+						if (SGListName[h].contains(sup[jj1])){
+							root.add(h)	//construct the array of indexes of this roots
+							findSubGraph(h, relFrom, SGList, SGListName, REF, diagPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype)
+						}
+					}
+					diagramManager.layout(REF, diagramManager.LAYOUT_COMPACT)	//adjust the Layout	
+					
+					roots.add(root)	//matrix of indexes of root (a row for each microservice)
+					def suppDFS=DFS(findMS(microservices,sup[jj1]), microservices)
+					for (k=0; k< suppDFS.size(); k++)
+						microDFS[jj1].add(suppDFS[k])
+				}
+				
+				for (n=0; n < solution.size(); n++){	//for each possible solution
+					vars.add(solution[n].getName())
+					def solPackage = IModelElementFactory.instance().createPackage()//create a package named after the solution itself
+					solPackage.setName(solution[n].getName())
+					diagPackage.addChild(solPackage)	//add the package to the Microservice one
+				
+					def SolD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new (class) diagram
+				
+					SolD.setName(solution[n].getName())	//name it after the solution 
+				
+					diagramManager.openDiagram(SolD)
+				
+					def SolEl = []	//List of elements in this new diagram
+					def SolElShape =[] 
+					def SOL = diagramManager.getActiveDiagram()	//take the diagram
+					vetassoc = []		//all the association in the new diagram
+					solPackage.addSubDiagram(SOL)	//add the diagram to the just created packaga
+					//generate the connected components of the subgraphs
+					for (k3=0; k3<microDFS.size(); k3++){
+						fun(microDFS[k3], SGsol[n], roots[k3], relFrom, SGList, SGListName, SOL, SolEl, SolElShape, solPackage, diagramManager, ssmod, assoctype, vetassoc)
+					}
+
+					createSolNode(solution[n].getName(), Microservice[m], [sup[0], sup[1]], SGsol[n], SolEl, SOL, SolElShape, solPackage, diagramManager, vetassoc)
+					diagramManager.layout(SOL, diagramManager.LAYOUT_COMPACT)	//adjust the layout of the diagram
+					
+				}
+				
+			}
+		}
+		else{
+			for (j1=0; j1< Microservice.size(); j1++){	//foreach microservice
+				def Name = Microservice[j1]
+
+				def diagPackage = IModelElementFactory.instance().createPackage()	//create a package with its name
+				diagPackage.setName(Name)
+				newPackage.addChild(diagPackage)	//add the package to the SS package
+				
+				def DD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new diagram
+				
+				DD.setName(Name)	//name it with ne name of the microservice
+				
+				ID = diagramManager.openDiagram(DD)
+				
+				def NewSG = []	//List of elements in this new diagram
+				def NewSGShape =[] 
+				def REF = diagramManager.getActiveDiagram()	//get the new diagram
+				
+				diagPackage.addSubDiagram(REF)	//add the diagram to the package of the microservice
+
+				def root = []
+				
+				for (h=0; h<SGList.size(); h++){	//find in the SIG all the SGs of the selected microservice
+					if (SGListName[h].contains(Name)){
+						root.add(h)	//construct the array of indexes of this roots
+						//generate the subgraphs starting from them in SIG and add them to the new diagram
+						findSubGraph(h, relFrom, SGList, SGListName, REF, diagPackage, NewSG, NewSGShape, diagramManager, ssmod, assoctype)
+					}
+				}
+				diagramManager.layout(REF, diagramManager.LAYOUT_COMPACT)	//adjust the Layout	
+				
+				
+				roots.add(root)	//matrix of indexes of root (a row for each microservice)
+				def micros = DFS(findMS(microservices,Name), microservices)	//find the subgraph of the influenced microservices (in the system model)
+				for (n=0; n < solution.size(); n++){	//for each possible solution
+				
+					def solPackage = IModelElementFactory.instance().createPackage()//create a package named after the solution itself
+					solPackage.setName(solution[n].getName())
+					diagPackage.addChild(solPackage)	//add the package to the Microservice one
+				
+					def SolD = diagramManager.createDiagram(IDiagramTypeConstants.DIAGRAM_TYPE_CLASS_DIAGRAM)	//create a new (class) diagram
+				
+					SolD.setName(solution[n].getName())	//name it after the solution 
+				
+					diagramManager.openDiagram(SolD)
+				
+					def SolEl = []	//List of elements in this new diagram
+					def SolElShape =[] 
+					def SOL = diagramManager.getActiveDiagram()	//take the diagram
+					vetassoc = []		//all the association in the new diagram
+					solPackage.addSubDiagram(SOL)	//add the diagram to the just created packaga
+					//generate the connected components of the subgraphs
+					fun(micros, SGsol[n], root, relFrom, SGList, SGListName, SOL, SolEl, SolElShape, solPackage, diagramManager, ssmod, assoctype, vetassoc)	
+					//add the solution node as a root
+					createSolNode(solution[n].getName(), Microservice[j1], Microservice, SGsol[n], SolEl, SOL, SolElShape, solPackage, diagramManager, vetassoc)
+					diagramManager.layout(SOL, diagramManager.LAYOUT_COMPACT)	//adjust the layout of the diagram
+
+				}
+			}	
+		}
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+
+// main operations
+	SIGcreation (diagramManager, MODEL, NewClassesNames, relFrom, microservices, microservicesName, AttributeList, StList, sgmod)
+	for (s5=0; s5<SecuritySmells.size(); s5++){
+		SUPP = detection(SecuritySmells[s5], microservices, users, links, systSecSG)
+		Microservices.add(SUPP[0])
+		ProblematicMicroservices.add(SUPP[1])
+	}
+	for (i6=0; i6<SSnames.size(); i6++){
+		if (ProblematicMicroservices[i6].size()>0)
+			subgraphGen(i6, SSnames, ProblematicMicroservices[i6], MODEL, diagramManager, ssmod, SSassociation, microservices)
+	}
+	return [Microservices, ProblematicMicroservices]
+	

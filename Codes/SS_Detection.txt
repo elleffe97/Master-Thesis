@@ -1,0 +1,370 @@
+import com.vp.plugin.model.factory.IModelElementFactory
+import com.vp.plugin.diagram.IDiagramTypeConstants
+
+def Microservices = []				//Matrix of microservices affected the security smells (general presence)
+def ProblematicMicroservices = [] 	//Matrix of microservices with SS with the SG filter
+
+def SecuritySmells = []	//List of security smells names to be detected (if void, all the SS will be checked)
+def SecuritySEl = [] //List of security smells elements to be detected (if void, all the SS will be checked)
+
+def projManager = appManager.getProjectManager()						//Open the project
+def proj = projManager.getProject()
+
+def model = proj.toAllLevelModelElementArray("Model")					//Select the model 
+def MODEL = model[0]
+
+def diagramManager = appManager.getDiagramManager()
+
+def Diag = diagramManager.getOpenedDiagrams()
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the system model diagram
+def Msm = []
+Diag.each{diag -> 														
+	if (diag.getName() == "Micro Services Model")
+		Msm.add(diag)
+}
+def MSM = Msm[0]
+//Take the elements (Microservices) from the system model diagram and save them in an array
+def msmel = MSM.toDiagramElementArray()
+
+def msmod = msmel.collect { el ->										
+    		return el.getMetaModelElement()
+}
+def microservices = []//Microservices 
+def users =[] // external access points
+def links = [] // associations between microservices
+def systSecSG = [] // system security requirements
+
+msmod.each{ el ->
+	if (el.hasStereotype("Microservice (I)") || el.hasStereotype("Microservice (N)") || el.hasStereotype("Microservice (C)"))
+		microservices.add(el)
+	if (el.hasStereotype("User"))
+		users.add(el)
+	if (el.getModelType() == "Association")
+		links.add(el)
+	if (el.hasStereotype("Security SoftGoal"))
+		systSecSG.add(el.getName())
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Take the security smells knowledge model diagram
+def Sskm = []
+Diag.each{ diag ->  													
+	if (diag.getName() == "Security Smells Model")
+		Sskm.add(diag)
+}
+def SSKM =Sskm[0]
+def ss = SSKM.toDiagramElementArray() 
+//Take the elements from the system model diagram and save them in an array
+def ssmod = ss.collect { el ->
+    return el.getMetaModelElement() 
+}	
+//Take all the associations of the diagram and save them into an array
+def SSassociation =[]
+for (i=0; i<ssmod.size(); i++){
+	if (ssmod[i].getModelType() == "Association"){
+		SSassociation.add(ssmod[i])
+	}
+}
+
+//Take the names of all the SS in the SSMK
+def SSnames=[]
+def SSel = []
+for (i=0; i<ssmod.size(); i++){
+	if (ssmod[i].hasStereotype("Security Smell")){
+		SSel.add(ssmod[i])
+		SSnames.add(ssmod[i].getName())
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function which returns the position of a microservice in the microservice array given its name
+def findMS(micro, name){
+	for (i=0; i<micro.size(); i++){
+		if (micro[i].getName()==name)
+			return i
+	}
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in an array given its name
+def presence(els, name){
+	for (i=0; i<els.size(); i++){
+		if (els[i].getName() == name)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//funcion to check the presence of an element in a string array given its name
+def namepresence(sels, name){
+	for (i=0; i<sels.size(); i++){
+		if (sels[i] == name)
+			return true
+	}
+	return false
+}
+
+//funcion to check the presence of an element in an array given its stereotype
+def presenceSter(els, stereotype){
+	for (i=0; i<els.size(); i++){
+		if (els[i].toStereotypeModelArray()[0].getName() == stereotype)
+			return true
+	}
+	return false
+}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to take the information about the SS
+def SSsearch(SecSmell){
+	def MSmethod = [] //list of methods/MS Components of MS affected by the SS
+	def features = [] //list of features of a AM/AA to be affected by the SS
+	def SecSG = []	//list of security softgoals theatened by the SS
+	def Related = SecSmell.toToRelationshipEndArray()
+	def prov = []
+	def sup = []
+	def usr = false
+	def typeof = 0
+	for (i3=0; i3<Related.size(); i3++){	
+		el = Related[i3].getOppositeEnd().getModelElement()
+		if (el.hasStereotype("Abstract MicroService")) {
+			sup=el.toChildArray()	// the attributes of the AM
+			for (j=0; j<sup.size(); j++){
+				if (sup[j].hasStereotype("Method"))
+					MSmethod.add(sup[j].getName())
+				else 
+				{
+					if (sup[j].getName()=="SKIP")
+						features.add(sup[j].getName())
+					else if (sup[j].toStereotypeModelArray()[0].getName() == "User contact")
+						usr=true
+					else if (sup[j].toStereotypeModelArray()[0].getName() == "Info")
+						features.add(sup[j].getName())
+					else
+						features.add(sup[j].toStereotypeModelArray()[0].getName())
+				}
+			}
+			if (MSmethod.size()==0){
+				if (el.toToRelationshipEndArray().size()>0){ //if the AM has a MC
+					mc = el.toToRelationshipEndArray()[0].getOppositeEnd().getModelElement()
+					MSmethod.add(mc.getName())
+				}
+				else
+					return [typeof, usr, features, MSmethod, SecSG] // case of undescribed SS
+			}
+		}
+		
+		else if (el.hasStereotype("Abstract Association")){ //if the SS is on the connection channels
+			typeof = 1
+		    sup=el.toChildArray()	// the attributes of the AM
+			for (j=0; j<sup.size(); j++)
+				features.add(sup[j].getName())
+		}
+		
+		else if (el.hasStereotype("Main Security SoftGoal")){ //the threatens SG (and their children)
+			prov.add(el.getName())
+			children = el.toChildArray()
+			for (j=0; j<children.size(); j++)
+				prov.add(children[j].getName())
+			SecSG.add(prov)
+		}
+	}
+	return [typeof, usr, features, MSmethod, SecSG]
+}	    
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to retrieve the security SG of a single MS
+def MicroServiceSG(Msattr){
+	SecuritySoftGoals = []
+	for (ss1=0; ss1<Msattr.size(); ss1++){
+		if (Msattr[ss1].hasStereotype("Security SoftGoal"))
+			SecuritySoftGoals.add(Msattr[ss1].getName())
+	}
+	return SecuritySoftGoals
+}
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to retrieve the SG of a coulpe of MS
+def CoupleSG(MS1, MS2, allMS){
+	SecuritySoftGoals = []
+	if ((presence(allMS, MS1.getName())) && !(presence(allMS, MS2.getName())))
+		return MicroServiceSG(MS1.toChildArray())
+	if ((presence(allMS, MS2.getName())) && !(presence(allMS, MS1.getName())))
+		return MicroServiceSG(MS2.toChildArray())
+	else {
+		ms1a = MicroServiceSG(MS1.toChildArray())
+		ms2a = MicroServiceSG(MS2.toChildArray())
+		SecuritySoftGoals = MicroServiceSG(MS2.toChildArray())
+		for (ss2=0; ss2<ms1a.size(); ss2++){
+			if (namepresence(ms2a, ms1a[ss2]) == false)
+				SecuritySoftGoals.add(ms1a[ss2])
+		}
+	}
+	return SecuritySoftGoals
+}
+
+//----------------------------------------------------------------------- ---------------------------------------------------------//
+// function to check if a microservices affected by SS has related security softgoals (case AM)
+def checkSG(MicSG, ssSG){
+	sum = 0
+	index = 0
+	array = [] 
+	for (o=0; o<ssSG.size(); o++)	//control array
+		array.add(0)
+	for (e1=0; e1<MicSG.size(); e1++){
+		while (index < ssSG.size()){
+			if (array[index] == 0 && namepresence(ssSG[index], MicSG[e1])){
+				array[index] = 1
+				sum+=1
+				break
+			}
+			else
+				index++
+		}
+	}
+	if (sum >= ssSG.size())
+		return true
+	else
+		return false
+	}
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//function to check if microservices with external contactshave the correct method to avoid the SS
+def checkExt (ElUSR, method, type){
+	MSList = []
+	micros = ElUSR.toToRelationshipEndArray()
+	for (m=0; m<micros.size(); m++){
+		Mic = micros[m].getOppositeEnd().getModelElement()
+		attrib = Mic.toChildArray()
+		if (type == 0){
+			if (!(presence(attrib, method))) 
+				MSList.add(Mic)	
+		}			
+		else{
+			if (presence(attrib, method)) 
+				MSList.add(Mic)
+		}	
+	}
+	return MSList
+}	
+
+//--------------------------------------------------------------------------------------------------------------------------------//
+//Main function
+def main(SS, MS, USR, LINKS, systSecSG){
+	
+	def microservices = [SS.getName()] //list of microservice with the actual SS
+	def problematicMS = [] //list of microservice with the actual SS and the filter on SG
+	def SSanalysis = SSsearch(SS)
+	def typeof = SSanalysis[0]
+	def userC = SSanalysis[1]
+	def feat = SSanalysis[2]
+	def method = SSanalysis[3]
+	def secSG = SSanalysis[4]
+	def foundMethod = false
+	def foundComp = false
+	
+	if (feat[0]=="SKIP")
+		return [microservices, problematicMS]	// only the name of the affected MS (eventualmente ricerca almeno dei SG)
+	
+	
+	if (typeof == 0){	// case AM
+		if (userC){		// case of MS with external interactions
+			if (feat.size()>0){// multiple authentication points
+				problematicMS.add("all")
+				supmicro = []
+				sgcheck = checkSG(systSecSG, secSG)
+				for (u=0;u<USR.size(); u++){
+					supplist = checkExt(USR[u], method[0], 1)
+					for (i0=0; i0<supplist.size(); i0++)
+						supmicro.add(supplist[i0])
+				}
+				if (supmicro.size()>1){
+					for (i1 =0 ; i1< supmicro.size(); i1++){
+						microservices.add(supmicro[i1].getName())
+						if (sgcheck)
+							problematicMS.add(supmicro[i1].getName())
+					}
+				}
+			}
+			else{		//external authorization
+				supmicro = []
+				for (u=0;u<USR.size(); u++){
+					supplist = checkExt(USR[u], method[0], 0)
+
+					for (i0=0; i0<supplist.size(); i0++)
+						supmicro.add(supplist[i0])
+				}
+				for (i1 =0 ; i1< supmicro.size(); i1++){
+						microservices.add(supmicro[i1].getName())
+						if (checkSG(MicroServiceSG(supmicro[i1].toChildArray()), secSG))
+							problematicMS.add(supmicro[i1].getName())
+				}
+			}
+		}
+		else{
+			for (k=0; k<MS.size(); k++){
+				MSels = MS[k].toChildArray()
+				foundMethod = false
+				foundMethod = presence(MSels, method[0])	//search for the presence of the required method/component
+				if (foundMethod == false){
+					if (feat.size()==0){	//Access control
+						microservices.add(MS[k].getName())
+						if (checkSG(MicroServiceSG(MSels), secSG))
+						problematicMS.add(MS[k].getName())
+					}
+					else{
+						if ((presenceSter(MSels, feat[0]))){	//Non-encrypted data exposure & Hardcoded Secrects
+							microservices.add(MS[k].getName())
+							if (checkSG(MicroServiceSG(MSels), secSG))
+								problematicMS.add(MS[k].getName())
+						}			
+					}
+				}
+				else {
+					if (feat.size() > 2){
+						index1 = findMS(MSels, method[0])
+						MSalg = MSels[index1].toChildArray()[0]
+						if (!(namepresence(feat, MSalg.getName()))){	//Own Cryptocode
+							microservices.add(MS[k].getName())
+							if (checkSG(MicroServiceSG(MSels), secSG))
+							problematicMS.add(MS[k].getName())
+						}
+					}
+				}	
+			}
+		}
+	}
+	
+	else {	// case AA
+		for (s1=0; s1<LINKS.size(); s1++){	//Not secured communication and Unauthenicated traffic
+			if (LINKS[s1].hasStereotype(feat[0]) == false ){
+				ms1 = LINKS[s1].getTo()
+				ms2 = LINKS[s1].getFrom()
+				microservices.add(ms1.getName() + "~" + ms2.getName())
+				if (checkSG(CoupleSG(ms1, ms2, MS), secSG))
+					problematicMS.add(ms1.getName() + "~" +  ms2.getName())
+			}
+		}
+	}	
+	return [microservices, problematicMS]	//the return are the list of detected microservices with and without the filter on SG
+}
+
+
+//-------------------------------------------------------------------------------------------------------------------------------//
+//Main call to the main function (for each security smell in the input list, or for all of them in the SSKM)
+if (SecuritySmells.size()==0)
+	SecuritySEl=SSel
+else{
+	for (z=0; z<SecuritySmells.size(); z++)
+		SecuritySEl.add(SSel[findMS(SSel, SecuritySmells[z])])
+}
+
+for (s5=0; s5<SecuritySEl.size(); s5++){
+	SUPP = main(SecuritySEl[s5], microservices, users, links, systSecSG)
+	Microservices.add(SUPP[0])
+	ProblematicMicroservices.add(SUPP[1])
+}
+
+return [Microservices, ProblematicMicroservices]
