@@ -1,5 +1,5 @@
 # Master-Thesis
-Decision support in a trade-off analysis to evaluate the effects of refactoring to solve or mitigate the problem of security smells.
+Methodology to help developers identify smells and decide whether/how to refactor them on a generic microservices system.
 
 ## Installation
 
