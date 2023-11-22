@@ -43,6 +43,6 @@ In this section, we will show how to execute the scripts to obtain the desired r
 
 3. Copy and paste the content of script "**SIG\_Generator.txt**" and click on the **Execute** button at the bottom left-hand side of the editor window. You should see the just-created SIG behind the window.
 
-4. Drop all the code in the script editor and paste the content of the file "**SS\_Detector.txt**". In this phase, you could interact with the code changing the security smell to be analyzed in the `SecuritySmells` list. Then run the code by clicking on the **Execute** button. The results will be shown on the right-hand side of the Script Editor Windows and you need to save them because they will be the input for the next and last step.
+4. Drop all the code in the script editor and paste the content of the file "**SS\_Detection.txt**". In this phase, you could interact with the code changing the security smell to be analyzed in the `SecuritySmells` list. Then run the code by clicking on the **Execute** button. The results will be shown on the right-hand side of the Script Editor Windows and you need to save them because they will be the input for the next and last step.
 
 5. Having a list of security smells and their relative affected microservices you can now copy and paste the code from "**SubDiagram\_Generator.txt**" and change the content of the lists `Microservices` and `SecuritySmells` with the just obtained strings. Then execute the scripts and visualize the results in the Model Navigator.
